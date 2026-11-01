@@ -673,8 +673,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
     hub: EventHub
     token: str
     allowed_origins: List[str]
+    # Off by default: the server usually runs in a cmux terminal the browser
+    # is watching, and a log line per poll would change that terminal and
+    # answer the next poll at once, forever. Errors are always logged.
+    access_log = False
 
     # -- helpers ----------------------------------------------------------
+
+    def log_request(self, code: Any = "-", size: Any = "-") -> None:
+        status = getattr(code, "value", code)
+        if self.access_log or not str(status).isdigit() or int(status) >= 400:
+            super().log_request(code, size)
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Never write the login token to the log.
@@ -916,12 +925,13 @@ class Server(http.server.ThreadingHTTPServer):
 
 
 def make_server(host: str, port: int, client: CmuxClient, hub: EventHub, token: str,
-                allowed_origins: Optional[List[str]] = None) -> Server:
+                allowed_origins: Optional[List[str]] = None, access_log: bool = False) -> Server:
     handler = type("BoundHandler", (Handler,), {
         "client": client,
         "hub": hub,
         "token": token,
         "allowed_origins": allowed_origins or [],
+        "access_log": access_log,
     })
     return Server((host, port), handler)
 
@@ -934,6 +944,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--socket", default=None, help="cmux socket path (default: $CMUX_SOCKET_PATH)")
     parser.add_argument("--allow-origin", action="append", default=[],
                         help="extra Origin allowed for POSTs, e.g. https://mac.tailnet.ts.net")
+    parser.add_argument("--access-log", action="store_true",
+                        help="log every request, not only errors (avoid when the server's own terminal is watched)")
     args = parser.parse_args(argv)
 
     token = os.environ.get("CMUX_WEB_TOKEN") or secrets.token_urlsafe(24)
@@ -949,7 +961,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     hub = EventHub(client)
     hub.start()
-    server = make_server(args.host, args.port, client, hub, token, args.allow_origin)
+    server = make_server(args.host, args.port, client, hub, token, args.allow_origin, args.access_log)
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print("warning: listening beyond loopback without TLS; anyone who gets the token can type into your terminals",
               file=sys.stderr)

@@ -56,6 +56,7 @@ Options:
 | `--socket` / `CMUX_SOCKET_PATH` | cmux socket. Defaults to the one the surrounding cmux terminal exports. |
 | `CMUX_SOCKET_PASSWORD` | Socket password, when cmux's socket mode is `password`. |
 | `CMUX_WEB_TOKEN` | Fixed access token instead of a random one. |
+| `--access-log` | Log every request. Off by default: only errors are logged, because a log line per poll would keep changing the server's own terminal, and a browser watching that workspace would poll again at once, forever. |
 | `--allow-origin <url>` | Extra origin allowed to POST, e.g. your Tailscale HTTPS name if a proxy rewrites `Host`. |
 
 ## Use it from your phone
@@ -100,7 +101,9 @@ browser ──HTTP/SSE──▶ server.py ──unix socket──▶ cmux.app
 `terminal.replay` returns cmux's `cmux.render-grid.v1` frame: styled text spans
 with resolved colors, the cursor and up to 240 rows of scrollback. The server
 turns it into a compact `{styles, lines}` form; with gzip a 111×81 terminal is
-about 30 KB per redraw. One `/api/screens` request covers every visible pane,
+about 30 KB per redraw. The page polls at most once a second (agents animate spinners, timers and a
+blinking dot, so a busy terminal changes several times a second) and stops
+polling while its tab is in the background. One `/api/screens` request covers every visible pane,
 because browsers allow only six connections per host. Viewing a hibernated agent
 wakes it, as the iOS app does.
 

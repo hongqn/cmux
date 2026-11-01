@@ -529,8 +529,29 @@ function restartPolling() {
   pollLoop(state.poll, ids);
 }
 
+// Agents animate (spinners, timers, a blinking dot), so a busy terminal
+// changes every few hundred ms. Redraw at most once a second, and not at all
+// while the tab is in the background.
+const MIN_POLL_INTERVAL_MS = 1000;
+
+function untilVisible(poll) {
+  if (!document.hidden) return Promise.resolve();
+  return new Promise((ok) => {
+    const done = () => { document.removeEventListener("visibilitychange", check); poll.abort.signal.removeEventListener("abort", done); ok(); };
+    const check = () => { if (!document.hidden) done(); };
+    document.addEventListener("visibilitychange", check);
+    poll.abort.signal.addEventListener("abort", done);
+  });
+}
+
 async function pollLoop(poll, ids) {
+  let lastStart = 0;
   while (state.poll === poll) {
+    await untilVisible(poll);
+    const wait = lastStart + MIN_POLL_INTERVAL_MS - Date.now();
+    if (wait > 0) await new Promise((ok) => setTimeout(ok, wait));
+    if (state.poll !== poll) return;
+    lastStart = Date.now();
     const surfaces = Object.fromEntries(ids.map((id) => [id, (state.screens[id] || {}).revision || ""]));
     try {
       const r = await api("/api/screens", { surfaces }, poll.abort.signal);
