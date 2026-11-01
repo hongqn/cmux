@@ -27,6 +27,7 @@ import queue
 import re
 import secrets
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -860,7 +861,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         presented = (query.get("token") or [""])[0]
         if not presented or not hmac.compare_digest(presented, self.token):
             return self._send_login_page(error=True)
-        secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""
+        tls = getattr(self.server, "ssl_context", None) is not None
+        secure = "; Secure" if tls or self.headers.get("X-Forwarded-Proto") == "https" else ""
         self.send_response(303)
         self.send_header(
             "Set-Cookie",
@@ -923,12 +925,56 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
+TLS_HANDSHAKE_SECONDS = 10
+
+
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
+    ssl_context: Optional[ssl.SSLContext] = None
+
+    def finish_request(self, request: Any, client_address: Any) -> None:
+        if self.ssl_context is None:
+            return super().finish_request(request, client_address)
+        # Handshake in the connection's own thread, so a slow or plain-HTTP
+        # client cannot stall accept() for everyone else.
+        try:
+            request.settimeout(TLS_HANDSHAKE_SECONDS)
+            tls = self.ssl_context.wrap_socket(request, server_side=True)
+            tls.settimeout(None)
+        except (ssl.SSLError, OSError):
+            return
+        try:
+            super().finish_request(tls, client_address)
+        finally:
+            try:
+                tls.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            tls.close()
+
+
+def load_tls_context(cert: str, key: Optional[str]) -> ssl.SSLContext:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(cert, key)
+    return ctx
+
+
+def cert_hostname(cert: str) -> Optional[str]:
+    """First non-wildcard DNS name in the certificate, e.g. mac.tailnet.ts.net from `tailscale cert`."""
+    try:
+        decoded = ssl._ssl._test_decode_cert(cert)  # type: ignore[attr-defined]
+    except (AttributeError, OSError, ssl.SSLError, ValueError):
+        return None
+    for kind, name in decoded.get("subjectAltName", ()):
+        if kind == "DNS" and "*" not in name:
+            return name
+    return None
 
 
 def make_server(host: str, port: int, client: CmuxClient, hub: EventHub, token: str,
-                allowed_origins: Optional[List[str]] = None, access_log: bool = False) -> Server:
+                allowed_origins: Optional[List[str]] = None, access_log: bool = False,
+                ssl_context: Optional[ssl.SSLContext] = None) -> Server:
     handler = type("BoundHandler", (Handler,), {
         "client": client,
         "hub": hub,
@@ -936,7 +982,9 @@ def make_server(host: str, port: int, client: CmuxClient, hub: EventHub, token: 
         "allowed_origins": allowed_origins or [],
         "access_log": access_log,
     })
-    return Server((host, port), handler)
+    httpd = Server((host, port), handler)
+    httpd.ssl_context = ssl_context
+    return httpd
 
 
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -968,15 +1016,22 @@ def detect_tailscale_serve(port: int) -> Optional[str]:
         return None
 
 
-def phone_url(host: str, port: int, public_url: Optional[str], serve_url: Optional[str]) -> Optional[str]:
-    """The base URL another device should open, or None when only this Mac can reach the server."""
+def phone_url(host: str, port: int, public_url: Optional[str], serve_url: Optional[str],
+              tls_name: Optional[str] = None, scheme: str = "http") -> Optional[str]:
+    """The base URL another device should open, or None when only this Mac can reach the server.
+
+    tls_name is the certificate's hostname when serving TLS ourselves; the
+    phone has to use that name, not the bind address, for the certificate to match.
+    """
     if public_url:
         return public_url.rstrip("/")
+    if tls_name:
+        return f"https://{tls_name}" + ("" if port == 443 else f":{port}")
     if serve_url:
         return serve_url
     if host in LOOPBACK_HOSTS or host in WILDCARD_HOSTS:
         return None
-    return f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+    return f"{scheme}://[{host}]:{port}" if ":" in host else f"{scheme}://{host}:{port}"
 
 
 def origin_of(url: str) -> str:
@@ -995,10 +1050,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--public-url", default=None,
                         help="URL other devices use to reach this server, e.g. https://mac.tailnet.ts.net; "
                              "printed as a QR code (default: found from `tailscale serve`, or --host)")
+    parser.add_argument("--tls-cert", default=None,
+                        help="serve HTTPS with this certificate (PEM; may also hold the key), "
+                             "e.g. from `tailscale cert <mac>.<tailnet>.ts.net`")
+    parser.add_argument("--tls-key", default=None, help="private key for --tls-cert (PEM)")
     parser.add_argument("--no-qr", action="store_true", help="do not print a QR code of the login URL")
     parser.add_argument("--access-log", action="store_true",
                         help="log every request, not only errors (avoid when the server's own terminal is watched)")
     args = parser.parse_args(argv)
+
+    if args.tls_key and not args.tls_cert:
+        parser.error("--tls-key needs --tls-cert")
+    ssl_context = None
+    if args.tls_cert:
+        try:
+            ssl_context = load_tls_context(args.tls_cert, args.tls_key)
+        except (OSError, ssl.SSLError) as exc:
+            print(f"error: cannot load TLS certificate: {exc}", file=sys.stderr)
+            return 1
 
     token = os.environ.get("CMUX_WEB_TOKEN") or secrets.token_urlsafe(24)
     client = CmuxClient(args.socket or default_socket_path(), os.environ.get("CMUX_SOCKET_PASSWORD"))
@@ -1011,28 +1080,31 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         print(f"warning: cmux socket check failed ({exc}); will keep retrying", file=sys.stderr)
 
-    serve_url = None if args.public_url else detect_tailscale_serve(args.port)
-    remote = phone_url(args.host, args.port, args.public_url, serve_url)
+    tls_name = cert_hostname(args.tls_cert) if args.tls_cert else None
+    serve_url = None if args.public_url or ssl_context else detect_tailscale_serve(args.port)
+    remote = phone_url(args.host, args.port, args.public_url, serve_url, tls_name,
+                       "https" if ssl_context else "http")
     origins = list(args.allow_origin)
     if remote and remote.startswith("https://"):
         origins.append(origin_of(remote))  # proxies may rewrite Host
 
     hub = EventHub(client)
     hub.start()
-    server = make_server(args.host, args.port, client, hub, token, origins, args.access_log)
-    if args.host not in LOOPBACK_HOSTS:
+    server = make_server(args.host, args.port, client, hub, token, origins, args.access_log, ssl_context)
+    if args.host not in LOOPBACK_HOSTS and ssl_context is None:
         print("warning: listening beyond loopback without TLS; anyone who gets the token can type into your terminals",
               file=sys.stderr)
     print(f"cmux socket: {client.socket_path}")
     local_host = "127.0.0.1" if args.host in WILDCARD_HOSTS else args.host
-    print(f"open: http://{local_host}:{args.port}/login?token={token}")
+    scheme = "https" if ssl_context else "http"
+    print(f"open: {scheme}://{local_host}:{args.port}/login?token={token}")
     if remote:
         login = f"{remote}/login?token={token}"
         print(f"phone: {login}")
         if not args.no_qr and sys.stdout.isatty():
             print(qrterm.render(qrterm.encode(login)))
     elif args.host in WILDCARD_HOSTS:
-        print("phone: pass --public-url http://<this-mac>:<port> to print a QR code")
+        print("phone: pass --public-url <url other devices use> to print a QR code")
     sys.stdout.flush()
     try:
         server.serve_forever()

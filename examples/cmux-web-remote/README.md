@@ -59,6 +59,7 @@ Options:
 | `--access-log` | Log every request. Off by default: only errors are logged, because a log line per poll would keep changing the server's own terminal, and a browser watching that workspace would poll again at once, forever. |
 | `--allow-origin <url>` | Extra origin allowed to POST, e.g. your Tailscale HTTPS name if a proxy rewrites `Host`. |
 | `--public-url <url>` | The URL other devices use, printed as a QR code at startup and allowed as an origin. Defaults to the `tailscale serve` HTTPS name that proxies to `--port`, or `http://<--host>:<port>` for a specific non-loopback `--host`. |
+| `--tls-cert <pem>`, `--tls-key <pem>` | Serve HTTPS directly. The key may live in the cert file. With a certificate for a DNS name, the phone URL and QR code use that name. |
 | `--no-qr` | Print the phone URL without the QR code. |
 
 ## Use it from your phone
@@ -79,7 +80,19 @@ token, and so the same QR code and bookmark, across restarts.
 You can also bind to the Mac's tailnet address, since Tailscale already
 encrypts the traffic: `--host 100.x.y.z` prints a QR code for
 `http://100.x.y.z:8787`. Browsers treat plain HTTP as insecure, though, so
-that page cannot show notifications.
+that page cannot show notifications. To get HTTPS without `tailscale serve`,
+fetch a certificate for the Mac's tailnet name and serve it yourself:
+
+```bash
+tailscale cert m1max.example.ts.net   # writes m1max.example.ts.net.crt and .key
+python3 server.py --host 100.x.y.z \
+  --tls-cert m1max.example.ts.net.crt --tls-key m1max.example.ts.net.key
+```
+
+The QR code then points at `https://m1max.example.ts.net:8787`. Tailscale
+certificates come from Let's Encrypt, so the Mac's tailnet name appears in
+public Certificate Transparency logs, and they expire after 90 days: rerun
+`tailscale cert` to renew, then restart the server.
 
 HTTPS also lets the page show browser notifications. On iOS, browser
 notifications work only after you add the page to the Home Screen (iOS 16.4+),

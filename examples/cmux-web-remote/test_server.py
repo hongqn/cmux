@@ -14,7 +14,10 @@ import io
 import http.client
 import json
 import os
+import shutil
 import socket
+import ssl
+import subprocess
 import sys
 import tempfile
 import threading
@@ -669,6 +672,58 @@ class PhoneAccessTest(unittest.TestCase):
         self.assertEqual(server.phone_url("127.0.0.1", 8787, None, "https://m.ts.net"), "https://m.ts.net")
         self.assertEqual(server.phone_url("0.0.0.0", 8787, "http://mac.local:8787/", None), "http://mac.local:8787")
         self.assertEqual(server.origin_of("https://m.ts.net/x?y"), "https://m.ts.net")
+
+
+@unittest.skipUnless(shutil.which("openssl"), "needs the openssl command to make a test certificate")
+class TlsTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp()
+        self.cert = os.path.join(self.tmp, "cert.pem")
+        self.key = os.path.join(self.tmp, "key.pem")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+                        "-subj", "/CN=mac.tail1.ts.net", "-addext", "subjectAltName=DNS:mac.tail1.ts.net",
+                        "-keyout", self.key, "-out", self.cert], check=True, capture_output=True)
+        self.fake = FakeCmux(os.path.join(self.tmp, "cmux.sock"), "pw")
+        client = server.CmuxClient(self.fake.path, "pw")
+        self.hub = server.EventHub(client)
+        self.hub.start()
+        ctx = server.load_tls_context(self.cert, self.key)
+        self.httpd = server.make_server("127.0.0.1", 0, client, self.hub, "tok", ssl_context=ctx)
+        self.port = self.httpd.server_address[1]
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def tearDown(self) -> None:
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.fake.close()
+
+    def https(self) -> http.client.HTTPSConnection:
+        ctx = ssl.create_default_context(cafile=self.cert)
+        ctx.check_hostname = False  # the test connects by IP
+        return http.client.HTTPSConnection("127.0.0.1", self.port, timeout=10, context=ctx)
+
+    def test_https_login_sets_a_secure_cookie(self) -> None:
+        conn = self.https()
+        conn.request("GET", "/login?token=tok")
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 303)
+        self.assertIn("; Secure", resp.getheader("Set-Cookie"))
+
+    def test_plain_http_client_does_not_block_https_clients(self) -> None:
+        stuck = socket.create_connection(("127.0.0.1", self.port))  # connects, never handshakes
+        try:
+            conn = self.https()
+            conn.request("GET", "/api/tree", headers={"Authorization": "Bearer tok"})
+            self.assertEqual(conn.getresponse().status, 200)
+        finally:
+            stuck.close()
+
+    def test_cert_hostname_and_phone_url(self) -> None:
+        name = server.cert_hostname(self.cert)
+        self.assertEqual(name, "mac.tail1.ts.net")
+        self.assertEqual(server.phone_url("100.1.2.3", 8787, None, None, name), "https://mac.tail1.ts.net:8787")
+        self.assertEqual(server.phone_url("0.0.0.0", 443, None, None, name), "https://mac.tail1.ts.net")
+        self.assertEqual(server.phone_url("100.1.2.3", 8787, None, None, None, "https"), "https://100.1.2.3:8787")
 
 
 if __name__ == "__main__":
