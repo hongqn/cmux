@@ -147,6 +147,7 @@ const state = {
   expanded: new Set(), // workspaces whose status list shows all pills
   poll: null,          // {key, abort}
   zoomPane: null,      // pane shown alone, when zoomed
+  fromBottom: {},      // surfaceId -> px scrolled up from the bottom (absent = follow the bottom)
 };
 
 async function api(path, body, signal) {
@@ -365,6 +366,8 @@ function renderWorkspace() {
     for (const r of rest) r.style.flex = "1 1 0";
     root.replaceChildren(...[node, ...rest].filter(Boolean));
   }
+  // Panes are built detached, where scrollHeight is 0; place them once attached.
+  for (const pre of root.querySelectorAll("pre.term")) restoreScroll(pre);
   updateTarget();
   restartPolling();
   markPaneRead();
@@ -434,6 +437,7 @@ function buildPane(pane) {
   if (shown && shown.type === "terminal") {
     const pre = el("pre", { className: "term" });
     pre.dataset.surface = shown.id;
+    pre.addEventListener("scroll", () => rememberScroll(pre), { passive: true });
     box.append(pre);
     const cached = state.screens[shown.id];
     if (cached) paintScreen(pre, cached); else pre.textContent = "Loading…";
@@ -463,12 +467,29 @@ function fitFont(pre, columns) {
   pre.style.fontSize = Math.max(7, Math.min(13, width / (columns * 0.6))) + "px";
 }
 
+// Scroll position lives in state, not in the <pre>: the tree refresh rebuilds
+// every pane, and a fresh <pre> would otherwise start at the top.
+function rememberScroll(pre) {
+  if (!pre.isConnected || pre.restoring) return;
+  const up = pre.scrollHeight - pre.scrollTop - pre.clientHeight;
+  if (up < 40) delete state.fromBottom[pre.dataset.surface];
+  else state.fromBottom[pre.dataset.surface] = up;
+}
+
+function restoreScroll(pre) {
+  if (!pre.isConnected) return;
+  const s = state.screens[pre.dataset.surface];
+  if (s && s.grid) fitFont(pre, s.grid.columns);
+  const up = state.fromBottom[pre.dataset.surface] || 0;
+  pre.restoring = true;
+  pre.scrollTop = Math.max(0, pre.scrollHeight - pre.clientHeight - up);
+  requestAnimationFrame(() => { pre.restoring = false; });
+}
+
 function paintScreen(pre, screen) {
-  const stick = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40 || !pre.dataset.painted;
   if (screen.grid) paintGrid(pre, screen.grid);
   else { pre.style.color = ""; pre.style.background = ""; pre.textContent = screen.text || (screen.error ? "[" + screen.error + "]" : ""); }
-  pre.dataset.painted = "1";
-  if (stick) pre.scrollTop = pre.scrollHeight;
+  restoreScroll(pre);
 }
 
 function paintGrid(pre, grid) {
@@ -569,10 +590,8 @@ async function pollLoop(poll, ids) {
 }
 
 new ResizeObserver(() => {
-  for (const pre of document.querySelectorAll("#panes pre.term")) {
-    const s = state.screens[pre.dataset.surface];
-    if (s && s.grid) fitFont(pre, s.grid.columns);
-  }
+  // A new font size changes the content height; keep the same distance from the bottom.
+  for (const pre of document.querySelectorAll("#panes pre.term")) restoreScroll(pre);
 }).observe($("panes"));
 
 // ---- input -------------------------------------------------------------------
