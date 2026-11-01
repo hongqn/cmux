@@ -8,7 +8,9 @@ Runs anywhere (no cmux app needed):
 
 from __future__ import annotations
 
+import contextlib
 import gzip
+import io
 import http.client
 import json
 import os
@@ -312,6 +314,26 @@ class ServerTest(ServerHarness):
         self.assertIn("HttpOnly", cookie)
         self.assertIn("SameSite=Strict", cookie)
         self.assertEqual(self.request("GET", "/login?token=wrong", auth=False).status, 401)
+
+    def test_successful_requests_are_not_logged(self) -> None:
+        # The server usually runs in a cmux terminal that the browser is
+        # watching: a log line per poll changes that terminal, which answers
+        # the next poll at once, which logs again, forever.
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.request("POST", "/api/screens", {"surfaces": {SURF_ID: ""}}).read()
+            self.request("GET", "/api/tree").read()
+            self.request("GET", "/api/tree", auth=False).read()  # 401 is still logged
+        self.assertNotIn("/api/screens", err.getvalue())
+        self.assertNotIn('"GET /api/tree HTTP/1.1" 200', err.getvalue())
+        self.assertIn('"GET /api/tree HTTP/1.1" 401', err.getvalue())
+
+    def test_access_log_flag_logs_everything(self) -> None:
+        self.httpd.RequestHandlerClass.access_log = True
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.request("GET", "/api/tree").read()
+        self.assertIn('"GET /api/tree HTTP/1.1" 200', err.getvalue())
 
     def test_bearer_token_works_for_scripts(self) -> None:
         resp = self.request("GET", "/api/tree", auth=False, headers={"Authorization": f"Bearer {self.token}"})
