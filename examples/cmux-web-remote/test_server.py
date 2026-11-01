@@ -312,12 +312,26 @@ class ServerTest(ServerHarness):
 
     def test_login_sets_strict_http_only_cookie(self) -> None:
         resp = self.request("GET", f"/login?token={self.token}", auth=False)
-        self.assertEqual(resp.status, 303)
+        self.assertEqual(resp.status, 200)
         cookie = resp.getheader("Set-Cookie")
         self.assertIn(f"{server.COOKIE_NAME}={self.token}", cookie)
         self.assertIn("HttpOnly", cookie)
         self.assertIn("SameSite=Strict", cookie)
         self.assertEqual(self.request("GET", "/login?token=wrong", auth=False).status, 401)
+
+    def test_login_continues_with_a_same_site_navigation(self) -> None:
+        # Opening the link from the iPhone camera is a cross-site navigation, and
+        # an HTTP redirect stays part of it, so Safari would not send the new
+        # SameSite=Strict cookie to "/" and show the login page again. The page
+        # itself has to navigate to "/".
+        resp = self.request("GET", f"/login?token={self.token}", auth=False)
+        body = resp.read().decode()
+        self.assertEqual(resp.status, 200)
+        self.assertIsNone(resp.getheader("Location"))
+        self.assertIn('http-equiv="refresh" content="0;url=/"', body)
+        self.assertIn('location.replace("/")', body)
+        self.assertEqual(resp.getheader("Cache-Control"), "no-store")
+        self.assertEqual(resp.getheader("Referrer-Policy"), "no-referrer")
 
     def test_successful_requests_are_not_logged(self) -> None:
         # The server usually runs in a cmux terminal that the browser is
@@ -706,7 +720,7 @@ class TlsTest(unittest.TestCase):
         conn = self.https()
         conn.request("GET", "/login?token=tok")
         resp = conn.getresponse()
-        self.assertEqual(resp.status, 303)
+        self.assertEqual(resp.status, 200)
         self.assertIn("; Secure", resp.getheader("Set-Cookie"))
 
     def test_plain_http_client_does_not_block_https_clients(self) -> None:
