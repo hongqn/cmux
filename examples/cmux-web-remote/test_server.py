@@ -38,6 +38,10 @@ class FakeCmux:
         self.auth_lines: List[str] = []
         self.stream_conns: List[socket.socket] = []
         self.text = "$ echo hi\nhi\n"
+        # Mimic cmuxOnly refusing a process outside cmux's process tree.
+        self.deny = False
+        # Mimic cmux builds (0.65.x) without surface.wait_text_change.
+        self.no_wait_method = False
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.bind(path)
         self.sock.listen(16)
@@ -62,6 +66,10 @@ class FakeCmux:
                     f.write(b"OK\n" if ok else b"ERROR: bad password\n")
                     f.flush()
                     continue
+                if self.deny:
+                    f.write(b"ERROR: Access denied - only processes started inside cmux can connect\n")
+                    f.flush()
+                    return
                 req = json.loads(line)
                 self.calls.append(req)
                 if req["method"] == "events.stream":
@@ -69,6 +77,11 @@ class FakeCmux:
                     f.flush()
                     self.stream_conns.append(conn)
                     threading.Event().wait()  # keep the stream open
+                if self.no_wait_method and req["method"] == "surface.wait_text_change":
+                    err = {"code": "method_not_found", "message": "Unknown method"}
+                    f.write(json.dumps({"id": req["id"], "ok": False, "error": err}).encode() + b"\n")
+                    f.flush()
+                    continue
                 result = self._result(req["method"], req.get("params") or {})
                 f.write(json.dumps({"id": req["id"], "ok": True, "result": result}).encode() + b"\n")
                 f.flush()
@@ -87,6 +100,8 @@ class FakeCmux:
             return {"workspaces": [{"id": WS_ID, "ref": "workspace:1", "title": "api", "selected": True}]}
         if method == "surface.list":
             return {"surfaces": [{"id": SURF_ID, "ref": "surface:1", "type": "terminal", "title": "zsh", "focused": True}]}
+        if method == "surface.read_text":
+            return {"text": self.text, "surface_id": params.get("surface_id")}
         if method == "surface.wait_text_change":
             changed = params.get("after_revision") != "rev-1"
             return {"text": self.text, "revision": "rev-1", "changed": changed}
@@ -106,7 +121,9 @@ class FakeCmux:
         self.sock.close()
 
 
-class ServerTest(unittest.TestCase):
+class ServerHarness(unittest.TestCase):
+    """Runs server.py on a free port against a FakeCmux."""
+
     PASSWORD = "sock-pass"
 
     def setUp(self) -> None:
@@ -147,6 +164,8 @@ class ServerTest(unittest.TestCase):
         conn.request(method, path, body=data, headers=h)
         return conn.getresponse()
 
+
+class ServerTest(ServerHarness):
     def test_api_requires_token(self) -> None:
         self.assertEqual(self.request("GET", "/api/tree", auth=False).status, 401)
         self.assertEqual(self.request("POST", "/api/send", {"surface_id": SURF_ID, "text": "x"}, auth=False).status, 401)
@@ -233,6 +252,78 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(msg["name"], "notification.created")  # input_sent was skipped
         self.assertEqual(msg["notification"]["title"], "Claude is waiting")
         self.assertEqual(self.hub.last_seq, 6)
+
+
+class ReadTextFallbackTest(ServerHarness):
+    """Older cmux has no surface.wait_text_change: poll surface.read_text."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fake.no_wait_method = True
+        self._saved = (server.WAIT_TIMEOUT_MS, server.FALLBACK_POLL_SECONDS)
+        server.WAIT_TIMEOUT_MS, server.FALLBACK_POLL_SECONDS = 1500, 0.05
+
+    def tearDown(self) -> None:
+        server.WAIT_TIMEOUT_MS, server.FALLBACK_POLL_SECONDS = self._saved
+        super().tearDown()
+
+    def screen(self, revision: str = "") -> Dict[str, Any]:
+        q = f"/api/screen?surface_id={SURF_ID}" + (f"&after_revision={revision}" if revision else "")
+        return json.loads(self.request("GET", q).read())
+
+    def test_first_read_returns_text_and_revision(self) -> None:
+        first = self.screen()
+        self.assertEqual(first["text"], self.fake.text)
+        self.assertTrue(first["revision"])
+        self.assertIn("surface.read_text", self.fake.methods())
+
+    def test_wait_returns_when_text_changes(self) -> None:
+        first = self.screen()
+        threading.Timer(0.3, lambda: setattr(self.fake, "text", "new output\n")).start()
+        started = time.time()
+        second = self.screen(first["revision"])
+        self.assertTrue(second["changed"])
+        self.assertEqual(second["text"], "new output\n")
+        self.assertNotEqual(second["revision"], first["revision"])
+        self.assertLess(time.time() - started, 1.4)
+
+    def test_wait_times_out_unchanged(self) -> None:
+        first = self.screen()
+        second = self.screen(first["revision"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(second["revision"], first["revision"])
+
+
+class AccessDeniedTest(unittest.TestCase):
+    """cmux answers a plain-text ERROR line when its socket mode refuses us."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp()
+        self.fake = FakeCmux(os.path.join(self.tmp, "cmux.sock"))
+        self.fake.deny = True
+        self.client = server.CmuxClient(self.fake.path, None)
+
+    def tearDown(self) -> None:
+        self.fake.close()
+
+    def test_call_raises_access_denied(self) -> None:
+        with self.assertRaises(server.CmuxError) as ctx:
+            self.client.call("system.ping")
+        self.assertEqual(ctx.exception.code, "access_denied")
+        self.assertIn("inside cmux", ctx.exception.message)
+
+    def test_api_reports_access_denied(self) -> None:
+        httpd = server.make_server("127.0.0.1", 0, self.client, server.EventHub(self.client), "t")
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=5)
+            conn.request("GET", "/api/tree", headers={"Authorization": "Bearer t"})
+            resp = conn.getresponse()
+            self.assertEqual(resp.status, 502)
+            self.assertEqual(json.loads(resp.read())["error"], "access_denied")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
 
 
 if __name__ == "__main__":
