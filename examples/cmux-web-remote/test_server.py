@@ -8,6 +8,7 @@ Runs anywhere (no cmux app needed):
 
 from __future__ import annotations
 
+import gzip
 import http.client
 import json
 import os
@@ -26,6 +27,32 @@ WS_ID = "11111111-1111-1111-1111-111111111111"
 SURF_ID = "22222222-2222-2222-2222-222222222222"
 WIN_ID = "33333333-3333-3333-3333-333333333333"
 NOTIF_ID = "44444444-4444-4444-4444-444444444444"
+SURF2_ID = "55555555-5555-5555-5555-555555555555"
+BROWSER_ID = "66666666-6666-6666-6666-666666666666"
+PANE1_ID = "77777777-7777-7777-7777-777777777777"
+PANE2_ID = "88888888-8888-8888-8888-888888888888"
+
+# A render grid in cmux.render-grid.v1 shape (trimmed to the fields used).
+RENDER_GRID = {
+    "format": "cmux.render-grid.v1",
+    "columns": 20, "rows": 2, "scrollback_rows": 1,
+    "terminal_foreground": "#FFFFFF", "terminal_background": "#1E1E1E",
+    "cursor": {"row": 1, "column": 4, "visible": True, "style": "block"},
+    "styles": [
+        {"id": 0, "foreground": "#FFFFFF", "foreground_source": "default",
+         "background": "#1E1E1E", "background_source": "default"},
+        {"id": 1, "foreground": "#CC372E", "foreground_source": "palette",
+         "background": "#1E1E1E", "background_source": "default", "bold": True},
+        {"id": 2, "foreground": "#FFFFFF", "foreground_source": "default",
+         "background": "#1E1E1E", "background_source": "default", "inverse": True},
+    ],
+    "scrollback_spans": [{"row": 0, "column": 0, "cell_width": 3, "text": "old", "style_id": 0}],
+    "row_spans": [
+        {"row": 0, "column": 0, "cell_width": 5, "text": "error", "style_id": 1},
+        {"row": 0, "column": 8, "cell_width": 2, "text": "\u4e2d", "style_id": 0},
+        {"row": 1, "column": 0, "cell_width": 2, "text": "$ ", "style_id": 2},
+    ],
+}
 
 
 class FakeCmux:
@@ -38,6 +65,7 @@ class FakeCmux:
         self.auth_lines: List[str] = []
         self.stream_conns: List[socket.socket] = []
         self.text = "$ echo hi\nhi\n"
+        self.text2 = "server listening\n"
         # Mimic cmuxOnly refusing a process outside cmux's process tree.
         self.deny = False
         # Mimic cmux builds (0.65.x) without surface.wait_text_change.
@@ -83,6 +111,11 @@ class FakeCmux:
                     f.flush()
                     continue
                 result = self._result(req["method"], req.get("params") or {})
+                if result is None:
+                    err = {"code": "not_found", "message": "Terminal surface not found"}
+                    f.write(json.dumps({"id": req["id"], "ok": False, "error": err}).encode() + b"\n")
+                    f.flush()
+                    continue
                 f.write(json.dumps({"id": req["id"], "ok": True, "result": result}).encode() + b"\n")
                 f.flush()
         except (OSError, ValueError):
@@ -97,14 +130,37 @@ class FakeCmux:
         if method == "window.list":
             return {"windows": [{"id": WIN_ID, "ref": "window:1"}]}
         if method == "workspace.list":
-            return {"workspaces": [{"id": WS_ID, "ref": "workspace:1", "title": "api", "selected": True}]}
+            return {"workspaces": [{"id": WS_ID, "ref": "workspace:1", "title": "api", "selected": True,
+                                    "current_directory": "/src/api"}]}
+        if method == "system.tree":
+            def surf(sid, pane, kind, title, selected=True):
+                return {"id": sid, "ref": "surface:" + sid[:1], "type": kind, "title": title,
+                        "pane_id": pane, "selected_in_pane": selected, "url": None}
+            return {"windows": [{"id": WIN_ID, "ref": "window:1", "workspaces": [{
+                "id": WS_ID, "ref": "workspace:1", "title": "api", "selected": True,
+                "layout": {"direction": "horizontal", "split": 0.4, "children": [
+                    {"pane": {"id": PANE1_ID}}, {"pane": {"id": PANE2_ID}}]},
+                "panes": [
+                    {"id": PANE1_ID, "ref": "pane:1", "focused": True, "selected_surface_id": SURF_ID,
+                     "surfaces": [surf(SURF_ID, PANE1_ID, "terminal", "zsh")]},
+                    {"id": PANE2_ID, "ref": "pane:2", "focused": False, "selected_surface_id": SURF2_ID,
+                     "surfaces": [surf(SURF2_ID, PANE2_ID, "terminal", "server"),
+                                  surf(BROWSER_ID, PANE2_ID, "browser", "docs", selected=False)]},
+                ],
+            }]}]}
+        if method == "terminal.replay":
+            if params.get("surface_id") != SURF_ID:
+                return None  # _serve answers not_found
+            return {"surface_id": SURF_ID, "render_grid": RENDER_GRID}
         if method == "surface.list":
             return {"surfaces": [{"id": SURF_ID, "ref": "surface:1", "type": "terminal", "title": "zsh", "focused": True}]}
         if method == "surface.read_text":
-            return {"text": self.text, "surface_id": params.get("surface_id")}
+            text = self.text if params.get("surface_id") == SURF_ID else self.text2
+            return {"text": text, "surface_id": params.get("surface_id")}
         if method == "surface.wait_text_change":
             changed = params.get("after_revision") != "rev-1"
-            return {"text": self.text, "revision": "rev-1", "changed": changed}
+            text = self.text if params.get("surface_id") == SURF_ID else self.text2
+            return {"text": text, "revision": "rev-1", "changed": changed}
         if method == "notification.list":
             return {"notifications": [{"id": NOTIF_ID, "workspace_id": WS_ID, "surface_id": SURF_ID,
                                        "title": "Claude is waiting", "body": "Approve Bash?", "is_read": False}]}
@@ -190,11 +246,18 @@ class ServerTest(ServerHarness):
         self.request("GET", "/api/tree").read()
         self.assertIn("auth " + self.PASSWORD, self.fake.auth_lines)
 
-    def test_tree_lists_windows_workspaces_and_surfaces(self) -> None:
+    def test_tree_has_layout_panes_and_tabs(self) -> None:
         tree = json.loads(self.request("GET", "/api/tree").read())
         ws = tree["windows"][0]["workspaces"][0]
         self.assertEqual(ws["id"], WS_ID)
-        self.assertEqual(ws["surfaces"][0]["id"], SURF_ID)
+        self.assertEqual(ws["current_directory"], "/src/api")  # merged from workspace.list
+        self.assertEqual(ws["layout"]["direction"], "horizontal")
+        self.assertEqual(ws["layout"]["split"], 0.4)
+        self.assertEqual([p["id"] for p in ws["panes"]], [PANE1_ID, PANE2_ID])
+        self.assertEqual([s["type"] for s in ws["panes"][1]["surfaces"]], ["terminal", "browser"])
+        self.assertEqual(ws["panes"][1]["selected_surface_id"], SURF2_ID)
+        # One snapshot call, not one surface.list per workspace.
+        self.assertNotIn("surface.list", self.fake.methods())
 
     def test_send_text_then_enter(self) -> None:
         resp = self.request("POST", "/api/send", {"surface_id": SURF_ID, "text": "ls", "enter": True})
@@ -217,15 +280,60 @@ class ServerTest(ServerHarness):
                               "Content-Type": "application/x-www-form-urlencoded"})
         self.assertEqual(conn.getresponse().status, 400)
 
-    def test_screen_long_polls_with_revision(self) -> None:
-        first = json.loads(self.request("GET", f"/api/screen?surface_id={SURF_ID}").read())
+    def screens(self, revisions: Dict[str, str], headers: Dict[str, str] = None) -> Dict[str, Any]:
+        resp = self.request("POST", "/api/screens", {"surfaces": revisions}, headers=headers)
+        self.assertEqual(resp.status, 200)
+        return json.loads(resp.read())["screens"]
+
+    def test_single_screen_long_polls_with_native_wait(self) -> None:
+        first = self.screens({SURF_ID: ""})[SURF_ID]
         self.assertEqual(first["text"], self.fake.text)
-        again = json.loads(self.request("GET", f"/api/screen?surface_id={SURF_ID}&after_revision=rev-1").read())
+        again = self.screens({SURF_ID: "rev-1"})[SURF_ID]
         self.assertFalse(again["changed"])
+        self.assertNotIn("grid", again)  # unchanged: nothing to redraw
         waits = [c["params"] for c in self.fake.calls if c["method"] == "surface.wait_text_change"]
         self.assertNotIn("after_revision", waits[0])
         self.assertEqual(waits[1]["after_revision"], "rev-1")
         self.assertEqual(waits[1]["timeout_ms"], server.WAIT_TIMEOUT_MS)
+
+    def test_screen_carries_colored_grid(self) -> None:
+        grid = self.screens({SURF_ID: ""})[SURF_ID]["grid"]
+        self.assertEqual((grid["columns"], grid["rows"]), (20, 2))
+        # scrollback line first, then the viewport rows.
+        self.assertEqual(len(grid["lines"]), 3)
+        self.assertEqual(grid["lines"][0], [[0, 3, "old", 0]])
+        self.assertEqual(grid["lines"][1], [[0, 5, "error", 1], [8, 2, "\u4e2d", 0]])
+        self.assertIn("color:#CC372E", grid["styles"]["1"])
+        self.assertIn("font-weight:bold", grid["styles"]["1"])
+        self.assertEqual(grid["styles"]["0"], "")  # default style adds nothing
+        # inverse swaps the terminal colors.
+        self.assertIn("color:#1E1E1E", grid["styles"]["2"])
+        self.assertIn("background:#FFFFFF", grid["styles"]["2"])
+        self.assertEqual(grid["cursor"], {"line": 2, "column": 4, "visible": True})
+        self.assertEqual((grid["foreground"], grid["background"]), ("#FFFFFF", "#1E1E1E"))
+
+    def test_screen_without_grid_falls_back_to_text(self) -> None:
+        screen = self.screens({SURF2_ID: ""})[SURF2_ID]
+        self.assertEqual(screen["text"], "server listening\n")
+        self.assertNotIn("grid", screen)
+
+    def test_screens_answers_several_surfaces(self) -> None:
+        result = self.screens({SURF_ID: "", SURF2_ID: ""})
+        self.assertEqual(set(result), {SURF_ID, SURF2_ID})
+        self.assertTrue(all(r["changed"] for r in result.values()))
+
+    def test_screens_gzip(self) -> None:
+        self.fake.text = "x" * 4096  # above the 1 KiB compression threshold
+        resp = self.request("POST", "/api/screens", {"surfaces": {SURF_ID: ""}},
+                            headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(resp.getheader("Content-Encoding"), "gzip")
+        body = json.loads(gzip.decompress(resp.read()))
+        self.assertIn(SURF_ID, body["screens"])
+
+    def test_screens_rejects_bad_input(self) -> None:
+        self.assertEqual(self.request("POST", "/api/screens", {"surfaces": []}).status, 400)
+        many = {f"{i:08d}-0000-0000-0000-000000000000": "" for i in range(server.MAX_SCREENS + 1)}
+        self.assertEqual(self.request("POST", "/api/screens", {"surfaces": many}).status, 400)
 
     def test_sse_delivers_unredacted_notification(self) -> None:
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
@@ -268,8 +376,8 @@ class ReadTextFallbackTest(ServerHarness):
         super().tearDown()
 
     def screen(self, revision: str = "") -> Dict[str, Any]:
-        q = f"/api/screen?surface_id={SURF_ID}" + (f"&after_revision={revision}" if revision else "")
-        return json.loads(self.request("GET", q).read())
+        resp = self.request("POST", "/api/screens", {"surfaces": {SURF_ID: revision}})
+        return json.loads(resp.read())["screens"][SURF_ID]
 
     def test_first_read_returns_text_and_revision(self) -> None:
         first = self.screen()
@@ -286,6 +394,17 @@ class ReadTextFallbackTest(ServerHarness):
         self.assertEqual(second["text"], "new output\n")
         self.assertNotEqual(second["revision"], first["revision"])
         self.assertLess(time.time() - started, 1.4)
+
+    def test_multi_wait_returns_only_changed_surface(self) -> None:
+        resp = self.request("POST", "/api/screens", {"surfaces": {SURF_ID: "", SURF2_ID: ""}})
+        first = json.loads(resp.read())["screens"]
+        revs = {sid: first[sid]["revision"] for sid in first}
+        threading.Timer(0.3, lambda: setattr(self.fake, "text2", "GET /health 200\n")).start()
+        resp = self.request("POST", "/api/screens", {"surfaces": revs})
+        second = json.loads(resp.read())["screens"]
+        self.assertFalse(second[SURF_ID]["changed"])
+        self.assertTrue(second[SURF2_ID]["changed"])
+        self.assertEqual(second[SURF2_ID]["text"], "GET /health 200\n")
 
     def test_wait_times_out_unchanged(self) -> None:
         first = self.screen()
