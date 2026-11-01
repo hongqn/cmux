@@ -24,19 +24,23 @@ import http.server
 import json
 import os
 import queue
+import re
 import secrets
 import socket
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "static", "index.html")
 
 COOKIE_NAME = "cmux_web_token"
-EVENT_CATEGORIES = ["notification", "workspace", "surface"]
+# "sidebar" carries status pills, logs and progress; "terminal" carries
+# program_status.changed (the "claude-code · Working" pill).
+EVENT_CATEGORIES = ["notification", "workspace", "surface", "sidebar", "terminal"]
 # Surface events that change the tree; input/key echoes are skipped.
 SKIPPED_EVENTS = {"surface.input_sent", "surface.key_sent", "surface.action"}
 WAIT_TIMEOUT_MS = 25000
@@ -44,6 +48,10 @@ WAIT_TIMEOUT_MS = 25000
 FALLBACK_POLL_SECONDS = 0.5
 MAX_BODY_BYTES = 256 * 1024
 MAX_SCREEN_LINES = 2000
+# A v1 reply has no terminator; the CLI stops after this long without data.
+V1_IDLE_SECONDS = 0.12
+SIDEBAR_FETCH_WORKERS = 8
+HOME = os.path.expanduser("~")
 # Panes a browser may watch in one /api/screens long-poll.
 MAX_SCREENS = 12
 
@@ -147,6 +155,70 @@ def compact_grid(grid: Dict[str, Any]) -> Dict[str, Any]:
             "visible": bool(cursor.get("visible", False)),
         },
     }
+
+
+_STATUS_ATTR = re.compile(r" (icon|color|url|priority|format|work)=(\S+)$")
+WORKING_STATES = {"running", "subagents"}
+
+
+def parse_sidebar_state(lines: Iterable[str]) -> Dict[str, Any]:
+    """Parse the v1 `sidebar_state` listing into what a sidebar row shows.
+
+    Status pills keep cmux's order, highest priority first. Only the newest
+    log entry is kept, as the sidebar row shows only that one.
+    """
+    statuses: List[Dict[str, Any]] = []
+    log: Optional[Dict[str, str]] = None
+    progress: Optional[Dict[str, Any]] = None
+    git_dirty = False
+    section = ""
+    for raw in lines:
+        if raw.startswith("  "):
+            item = raw[2:]
+            if section == "status":
+                attrs: Dict[str, str] = {}
+                while True:
+                    m = _STATUS_ATTR.search(item)
+                    if not m:
+                        break
+                    attrs[m.group(1)] = m.group(2)
+                    item = item[:m.start()]
+                key, _, value = item.partition("=")
+                statuses.append({
+                    "key": key, "value": value,
+                    "icon": attrs.get("icon"), "color": attrs.get("color"), "url": attrs.get("url"),
+                    "priority": int(attrs.get("priority", "0") or 0),
+                    "format": attrs.get("format", "plain"), "work": attrs.get("work"),
+                })
+            elif section == "log":
+                m = re.match(r"\[(\w+)\] (.*)$", item)
+                if m:
+                    log = {"level": m.group(1), "message": m.group(2)}
+            continue
+        key, _, value = raw.partition("=")
+        section = {"status_count": "status", "log_count": "log"}.get(key, "")
+        if key == "git_branch":
+            git_dirty = value.endswith(" dirty")
+        elif key == "progress" and value != "none":
+            number, _, label = value.partition(" ")
+            try:
+                progress = {"value": float(number), "label": label or None}
+            except ValueError:
+                progress = None
+    statuses.sort(key=lambda e: -e["priority"])  # stable: ties keep cmux's order
+    return {
+        "statuses": statuses,
+        "log": log,
+        "progress": progress,
+        "working": any(e["work"] in WORKING_STATES for e in statuses),
+        "git_dirty": git_dirty,
+    }
+
+
+def abbreviate_home(path: Optional[str]) -> Optional[str]:
+    if path and (path == HOME or path.startswith(HOME + "/")):
+        return "~" + path[len(HOME):]
+    return path
 
 
 def default_socket_path() -> str:
@@ -327,11 +399,87 @@ class CmuxClient:
 # ---------------------------------------------------------------------------
 
 
+class SidebarCache:
+    """Per-workspace status pills, newest log line and progress.
+
+    cmux has no v2 read for these, so they come from the v1 `sidebar_state`
+    command: all workspaces once, then one workspace per sidebar event.
+    """
+
+    def __init__(self, client: "CmuxClient"):
+        self.client = client
+        self.entries: Dict[str, Dict[str, Any]] = {}
+        self.pending: set = set()
+        self.lock = threading.Lock()
+        self.pool = ThreadPoolExecutor(SIDEBAR_FETCH_WORKERS, thread_name_prefix="sidebar")
+        self.on_change = None  # callable(workspace_id, entry)
+
+    def client_v1_lines(self, command: str) -> List[str]:
+        """Send one v1 text command; read its reply to the end."""
+        conn = LineSocket(self.client.socket_path, self.client.password, timeout=5.0)
+        try:
+            conn.write_line(command)
+            lines = [conn.read_line()]
+            if lines[0].startswith("ERROR"):
+                raise CmuxError("v1_error", lines[0])
+            remaining: Optional[int] = None  # log lines still expected, once known
+            conn.sock.settimeout(V1_IDLE_SECONDS)
+            while remaining is None or remaining > 0:
+                try:
+                    line = conn.read_line()
+                except (socket.timeout, CmuxError):
+                    break
+                lines.append(line)
+                if remaining is not None:
+                    remaining -= 1
+                elif line.startswith("log_count="):
+                    # sidebar_state lists at most the 5 newest log entries last.
+                    remaining = min(int(line.split("=", 1)[1] or 0), 5)
+            return lines
+        finally:
+            conn.close()
+
+    def fetch(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            entry = parse_sidebar_state(self.client_v1_lines(f"sidebar_state --tab={workspace_id}"))
+        except (CmuxError, OSError, ValueError):
+            entry = None
+        with self.lock:
+            self.pending.discard(workspace_id)
+            if entry is not None:
+                self.entries[workspace_id] = entry
+        if entry is not None and self.on_change:
+            self.on_change(workspace_id, entry)
+        return entry
+
+    def refresh(self, workspace_ids: Iterable[str]) -> None:
+        """Fetch now and wait (startup and tests)."""
+        list(self.pool.map(self.fetch, list(workspace_ids)))
+
+    def ensure(self, workspace_ids: Iterable[str]) -> None:
+        """Fetch in the background the workspaces not cached or queued yet."""
+        with self.lock:
+            missing = [w for w in workspace_ids if w not in self.entries and w not in self.pending]
+            self.pending.update(missing)
+        for workspace_id in missing:
+            self.pool.submit(self.fetch, workspace_id)
+
+    def update_later(self, workspace_id: str) -> None:
+        self.pool.submit(self.fetch, workspace_id)
+
+    def get(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        with self.lock:
+            return self.entries.get(workspace_id)
+
+
 class EventHub:
     """Keeps one events.stream subscription and fans frames out to browsers."""
 
     def __init__(self, client: CmuxClient):
         self.client = client
+        self.sidebar = SidebarCache(client)
+        self.sidebar.on_change = lambda ws_id, entry: self.publish(
+            {"type": "sidebar", "workspace_id": ws_id, "sidebar": entry})
         self.subscribers: List["queue.Queue[Dict[str, Any]]"] = []
         self.lock = threading.Lock()
         self.last_seq: Optional[int] = None
@@ -410,7 +558,14 @@ class EventHub:
         seq = frame.get("seq")
         if isinstance(seq, int):
             self.last_seq = seq
-        if frame.get("name") in SKIPPED_EVENTS:
+        name = str(frame.get("name") or "")
+        if name in SKIPPED_EVENTS:
+            return
+        if name.startswith("sidebar.") or name == "program_status.changed":
+            # The row's pills changed: re-read that workspace, then tell
+            # browsers (SidebarCache.on_change publishes a "sidebar" message).
+            if frame.get("workspace_id"):
+                self.sidebar.update_later(str(frame["workspace_id"]))
             return
         message: Dict[str, Any] = {
             "type": "event",
@@ -444,32 +599,46 @@ class EventHub:
 # ---------------------------------------------------------------------------
 
 
-def build_tree(client: CmuxClient) -> Dict[str, Any]:
-    """Windows, workspaces, split layouts, panes and tabs in two socket calls.
+def build_tree(client: CmuxClient, sidebar: Optional[SidebarCache] = None) -> Dict[str, Any]:
+    """Windows, workspaces, split layouts, panes, tabs and sidebar rows.
 
-    system.tree carries the layout and panes; workspace.list adds the
-    directory and latest agent message shown in the sidebar.
+    system.tree carries the layout and panes; extension.sidebar.snapshot
+    carries what a cmux sidebar row shows (unread count, latest notification,
+    description, branch, ports); the SidebarCache adds status pills and logs.
     """
     snapshot = client.call("system.tree") or {}
     out = []
+    all_ids: List[str] = []
     for win in snapshot.get("windows") or []:
-        summaries: Dict[str, Dict[str, Any]] = {}
+        rows: Dict[str, Dict[str, Any]] = {}
         try:
-            rows = (client.call("workspace.list", {"window_id": win.get("id")}) or {}).get("workspaces") or []
-            summaries = {str(row.get("id")): row for row in rows}
+            listed = (client.call("extension.sidebar.snapshot", {"window_id": win.get("id")}) or {}).get("workspaces") or []
+            rows = {str(row.get("id")): row for row in listed}
         except CmuxError:
             pass
         workspaces = []
         for ws in win.get("workspaces") or []:
-            summary = summaries.get(str(ws.get("id")), {})
+            ws_id = str(ws.get("id"))
+            all_ids.append(ws_id)
+            row = rows.get(ws_id, {})
+            branches = row.get("git_branches") or []
             workspaces.append({
                 "id": ws.get("id"),
                 "ref": ws.get("ref"),
                 "title": ws.get("title"),
                 "selected": ws.get("selected"),
-                "pinned": ws.get("pinned"),
-                "current_directory": summary.get("current_directory"),
-                "latest_message": summary.get("latest_conversation_message") or summary.get("latest_submitted_message"),
+                "pinned": row.get("pinned", ws.get("pinned")),
+                "description": row.get("description"),
+                "custom_color": row.get("custom_color"),
+                "unread_count": row.get("unread_count") or 0,
+                "latest_notification_text": row.get("latest_notification_text"),
+                "latest_message": row.get("latest_conversation_message") or row.get("latest_submitted_message"),
+                "directory": abbreviate_home(row.get("current_directory")),
+                "branch": row.get("branch_summary"),
+                "git_dirty": any(b.get("dirty") for b in branches),
+                "pull_requests": row.get("pull_request_urls") or [],
+                "ports": row.get("listening_ports") or [],
+                "sidebar": sidebar.get(ws_id) if sidebar else None,
                 "layout": ws.get("layout"),
                 "panes": [
                     {
@@ -492,6 +661,8 @@ def build_tree(client: CmuxClient) -> Dict[str, Any]:
                 ],
             })
         out.append({"id": win.get("id"), "ref": win.get("ref"), "workspaces": workspaces})
+    if sidebar:
+        sidebar.ensure(all_ids)
     return {"windows": out}
 
 
@@ -579,7 +750,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._send_json(401, {"error": "unauthorized"})
         try:
             if url.path == "/api/tree":
-                return self._send_json(200, build_tree(self.client))
+                return self._send_json(200, build_tree(self.client, self.hub.sidebar))
             if url.path == "/api/notifications":
                 result = self.client.call("notification.list") or {}
                 return self._send_json(200, {"notifications": result.get("notifications") or []})
@@ -654,7 +825,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/notifications/read":
             if body.get("all"):
                 return self.client.call("notification.mark_read", {"all": True}) or {}
+            if isinstance(body.get("workspace_id"), str) and body["workspace_id"]:
+                # A pane was looked at: mark its notifications read, as focusing it in cmux does.
+                params = {"workspace_id": body["workspace_id"]}
+                if isinstance(body.get("surface_id"), str) and body["surface_id"]:
+                    params["surface_id"] = body["surface_id"]
+                return self.client.call("notification.mark_read", params) or {}
             return self.client.call("notification.mark_read", {"id": need("id")}) or {}
+        if path == "/api/notifications/clear_all":
+            # cmux's "Clear All": dismiss every notification, one by one.
+            items = (self.client.call("notification.list") or {}).get("notifications") or []
+            for item in items:
+                self.client.call("notification.dismiss", {"id": item.get("id")})
+            return {"dismissed": len(items)}
         if path == "/api/notifications/dismiss":
             return self.client.call("notification.dismiss", {"id": need("id")}) or {}
         return None

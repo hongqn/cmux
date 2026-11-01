@@ -9,7 +9,13 @@ the cmux app on your Mac:
   zoom one pane to read it full size
 - type text and send keys (Enter, Esc, Ctrl-C, Tab, arrows, Ctrl-D)
 - create a workspace, or switch the Mac's window to one
-- get cmux notifications live, with browser notifications and an unread count
+- a sidebar that mirrors cmux's own rows: unread badge, latest notification
+  preview, description, color rail, agent status pills (Working / Done / Idle),
+  newest log line, progress, branch, directory, PRs and ports
+- a bell with the unread count opening a notifications list laid out like
+  cmux's (Jump to Latest Unread, Clear All, per-notification clear), plus
+  browser notifications; picking a pane marks its notifications read, as
+  focusing it in cmux does
 
 It uses only the public cmux control socket (v2 JSON lines) and the
 [`events.stream`](../../docs/events.md) subscription. It does not change cmux.
@@ -79,14 +85,15 @@ browser ──HTTP/SSE──▶ server.py ──unix socket──▶ cmux.app
 
 | HTTP | cmux v2 method |
 | --- | --- |
-| `GET /api/tree` | `system.tree` (split layout, panes, tabs) plus `workspace.list` (directory, latest message) |
+| `GET /api/tree` | `system.tree` (split layout, panes, tabs), `extension.sidebar.snapshot` (unread count, latest notification, description, color, branch, PRs, ports) and cached `sidebar_state` (status pills, log, progress) |
 | `POST /api/screens {surfaces: {id: revision}}` | Waits until any listed terminal changes, then returns its text and colored grid. Change detection: `surface.wait_text_change` for one terminal; `surface.read_text` polled every 0.5 s for several, or on cmux builds without it (0.65.x). Colors: `terminal.replay` |
 | `POST /api/send {surface_id, text, enter}` | `surface.send_text`, then `surface.send_key enter` |
 | `POST /api/key {surface_id, key}` | `surface.send_key` |
 | `POST /api/workspace/select {workspace_id}` | `workspace.select` (switches the Mac's screen too) |
 | `POST /api/workspace/create {cwd?}` | `workspace.create` |
 | `GET /api/notifications` | `notification.list` |
-| `POST /api/notifications/read {id \| all}` | `notification.mark_read` |
+| `POST /api/notifications/read {id \| all \| workspace_id, surface_id}` | `notification.mark_read` |
+| `POST /api/notifications/clear_all` | `notification.dismiss` for each notification |
 | `POST /api/notifications/dismiss {id}` | `notification.dismiss` |
 | `GET /api/events` (SSE) | `events.stream` |
 
@@ -96,6 +103,13 @@ turns it into a compact `{styles, lines}` form; with gzip a 111×81 terminal is
 about 30 KB per redraw. One `/api/screens` request covers every visible pane,
 because browsers allow only six connections per host. Viewing a hibernated agent
 wakes it, as the iOS app does.
+
+Status pills, the newest log line and progress have no v2 read, so the server
+uses the v1 `sidebar_state --tab=<id>` command the `cmux sidebar-state` CLI
+uses: every workspace once at startup (eight at a time, about 1 s for 136
+workspaces), then only the workspace named by a `sidebar.*` or
+`program_status.changed` event. Browsers get a `sidebar` message and redraw
+that row.
 
 The event stream redacts notification titles and bodies, so on
 `notification.created` the server looks the notification up with

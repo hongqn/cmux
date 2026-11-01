@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>cmux web remote</title>
 <style>
-  :root { color-scheme: dark; --bg:#111; --panel:#1b1b1b; --line:#2c2c2c; --fg:#ddd; --mute:#888; --acc:#4c9aff; --warn:#e8a33d; }
+  :root { color-scheme: dark; --bg:#111; --panel:#1e1e1e; --line:#2c2c2c; --fg:#ddd; --mute:#888; --acc:#0a84ff; --warn:#e8a33d; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui,-apple-system,sans-serif; height:100dvh; display:flex; flex-direction:column; }
   header { display:flex; align-items:center; gap:.6em; padding:.5em .8em; border-bottom:1px solid var(--line); }
@@ -16,16 +16,32 @@
   button { background:#2a2a2a; color:var(--fg); border:1px solid #3a3a3a; border-radius:6px; padding:.35em .7em; font:inherit; cursor:pointer; }
   button:hover { border-color:var(--acc); }
   main { flex:1; display:flex; min-height:0; }
-  #side { width:280px; flex:none; border-right:1px solid var(--line); overflow-y:auto; overflow-x:hidden; background:var(--panel); }
-  #filter { position:sticky; top:0; z-index:1; width:100%; padding:.5em .7em; background:#141414; color:var(--fg); border:0; border-bottom:1px solid var(--line); font:inherit; }
+  #side { width:280px; flex:none; border-right:1px solid var(--line); overflow-y:auto; overflow-x:hidden; background:var(--panel); padding:0 6px 8px; }
+  #filter { position:sticky; top:0; z-index:1; width:calc(100% + 12px); margin:0 -6px 6px; padding:.5em .8em; background:#181818; color:var(--fg); border:0; border-bottom:1px solid var(--line); font:inherit; font-size:12px; }
   #view { flex:1; display:flex; flex-direction:column; min-width:0; }
-  .ws { border-bottom:1px solid var(--line); padding:.5em .7em; cursor:pointer; border-left:3px solid transparent; }
-  .ws.active { background:#1e2a3a; border-left-color:var(--acc); }
-  .ws-title { display:flex; align-items:center; gap:.4em; font-weight:600; }
-  .ws-title .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .ws-title .sel { color:var(--acc); font-size:.8em; white-space:nowrap; }
-  .ws-title .badge { background:var(--warn); color:#000; border-radius:9px; padding:0 .45em; font-size:.75em; }
-  .ws-meta { color:var(--mute); font-size:.8em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* Sidebar rows: order, sizes and colors follow SidebarWorkspaceRowCellView. */
+  .ws { --rowbg:var(--panel); --p:255,255,255; position:relative; margin:0 0 6px; padding:7px 10px 8px 12px; border-radius:8px; cursor:pointer; background:var(--rowbg); color:rgb(var(--p)); }
+  .ws:hover { background:#262626; --rowbg:#262626; }
+  .ws.active, .ws.active:hover { --rowbg:var(--acc); background:var(--acc); }
+  .ws.mac:not(.active) { box-shadow:inset 0 0 0 1px rgba(10,132,255,.55); }
+  .ws .rail { position:absolute; left:3px; top:6px; bottom:6px; width:3px; border-radius:2px; }
+  .ws .sec { color:rgba(var(--p),.8); }
+  .ws-title { display:flex; align-items:center; gap:5px; font-size:12.5px; font-weight:600; line-height:1.35; }
+  .ws-title .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+  .ws-title .ico { width:9px; height:9px; color:rgba(var(--p),.8); flex:none; }
+  .badge { flex:none; min-width:16px; height:16px; padding:0 4px; border-radius:8px; background:var(--acc); color:#fff; font-size:10px; font-weight:700; line-height:16px; text-align:center; }
+  .ws.active .badge { background:#fff; color:var(--acc); }
+  .ws .desc { font-size:10.5px; color:rgba(var(--p),.84); margin-top:2px; white-space:pre-wrap; word-break:break-word; display:-webkit-box; -webkit-line-clamp:12; -webkit-box-orient:vertical; overflow:hidden; }
+  .ws .desc a, .ws a { color:inherit; text-decoration:underline; }
+  .ws .sub { font-size:10px; color:rgba(var(--p),.8); margin-top:3px; white-space:pre-wrap; word-break:break-word; display:-webkit-box; -webkit-line-clamp:12; -webkit-box-orient:vertical; overflow:hidden; }
+  .ws .line { display:flex; align-items:center; gap:5px; font-size:10px; margin-top:3px; color:rgba(var(--p),.8); min-width:0; }
+  .ws .line > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ws .line svg { width:8px; height:8px; flex:none; }
+  .ws .more { font-size:10px; margin-top:2px; color:rgba(var(--p),.6); text-decoration:underline; cursor:pointer; }
+  .ws .mono { font:10px ui-monospace,SFMono-Regular,Menlo,monospace; color:rgba(var(--p),.75); margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ws .bar { height:3px; border-radius:2px; background:rgba(var(--p),.15); margin-top:5px; overflow:hidden; }
+  .ws .bar > i { display:block; height:100%; background:rgba(var(--p),.8); }
+  .ws .links { display:flex; flex-wrap:wrap; gap:8px; font:10px ui-monospace,Menlo,monospace; margin-top:3px; color:rgba(var(--p),.8); }
   #panes { flex:1; display:flex; min-height:0; background:#000; }
   .split { display:flex; flex:1; min-width:0; min-height:0; gap:2px; }
   .split.h { flex-direction:row; } .split.v { flex-direction:column; }
@@ -36,7 +52,6 @@
   .tab.on { color:var(--fg); background:#262626; box-shadow:inset 0 -2px var(--acc); }
   .tab.mac::after { content:" ●"; color:var(--acc); }
   .zoom { margin-left:auto; border:0; background:none; color:var(--mute); padding:0 .6em; font-size:.9em; flex:none; }
-  body.hide-notifs #notifs { display:none; }
   .term { flex:1; margin:0; padding:.3em .4em; overflow:auto; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; line-height:1.2; white-space:pre; }
   .term .cur { outline:1px solid currentColor; }
   .note { flex:1; display:flex; align-items:center; justify-content:center; color:var(--mute); padding:1em; text-align:center; word-break:break-all; }
@@ -45,23 +60,37 @@
   #input { flex:1 1 240px; min-height:2.4em; max-height:8em; background:#0f0f0f; color:var(--fg); border:1px solid #3a3a3a; border-radius:6px; padding:.4em; font:13px ui-monospace,Menlo,monospace; resize:vertical; }
   #keys { display:flex; flex-wrap:wrap; gap:.3em; width:100%; }
   #keys button { font-size:.85em; }
-  #notifs { width:320px; flex:none; border-left:1px solid var(--line); overflow:auto; background:var(--panel); }
-  #notifs h2 { font-size:.95em; margin:.6em .7em; display:flex; justify-content:space-between; align-items:center; }
-  .n { padding:.5em .7em; border-top:1px solid var(--line); cursor:pointer; }
-  .n.unread { border-left:3px solid var(--warn); }
-  .n .nt { font-weight:600; }
-  .n .nb { color:#bbb; font-size:.9em; white-space:pre-wrap; word-break:break-word; }
-  .n .nb.clamp { display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; cursor:zoom-in; }
-  .n.open .nb.clamp { display:block; cursor:zoom-out; }
-  .n .nm { color:var(--mute); font-size:.75em; }
+  /* Notifications popover: layout of cmux's NotificationsPage. */
+  #bell { position:relative; padding:.3em .55em; }
+  #bell svg { width:16px; height:16px; vertical-align:-3px; }
+  #bell .badge { position:absolute; top:-5px; right:-6px; }
+  #notifs { position:fixed; top:46px; right:10px; z-index:10; width:400px; max-height:calc(100dvh - 60px); display:none; flex-direction:column; background:#232323; border:1px solid #3a3a3a; border-radius:12px; box-shadow:0 12px 40px rgba(0,0,0,.5); }
+  body.show-notifs #notifs { display:flex; }
+  #notifs .head { display:flex; align-items:center; gap:8px; padding:12px 16px; }
+  #notifs .head h2 { font-size:17px; font-weight:600; margin:0; flex:1; }
+  #notifs .head button { font-size:12px; }
+  #nlist { overflow:auto; padding:0 12px 12px; display:flex; flex-direction:column; gap:8px; }
+  .n { display:flex; align-items:flex-start; gap:12px; padding:12px; border-radius:10px; background:#2d2d2d; cursor:pointer; }
+  .n:hover { background:#353535; }
+  .n .dot { flex:none; width:8px; height:8px; margin-top:6px; border-radius:50%; border:1px solid rgba(10,132,255,.2); }
+  .n.unread .dot { background:var(--acc); border-color:var(--acc); }
+  .n .main { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }
+  .n .top { display:flex; gap:8px; align-items:baseline; }
+  .n .nt { font-weight:600; font-size:13px; flex:1; min-width:0; }
+  .n .time, .n .tab { font-size:11px; color:var(--mute); white-space:nowrap; }
+  .n .nb { font-size:12px; color:#aaa; white-space:pre-wrap; word-break:break-word; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+  .n .x { flex:none; border:0; background:none; padding:0 2px; color:var(--mute); font-size:15px; line-height:1; }
+  .n-empty { text-align:center; color:var(--mute); padding:28px 16px; }
+  .n-empty b { display:block; color:var(--fg); margin-bottom:4px; }
+  #notifs .foot { border-top:1px solid #333; padding:8px 16px; font-size:11px; color:var(--mute); }
+  #notifs .foot button { font-size:11px; padding:.2em .6em; }
   .empty { color:var(--mute); padding:1em; }
   #toggleSide { display:none; }
   @media (max-width: 900px) {
     #toggleSide { display:inline-block; }
-    body.hide-notifs.show-notifs #notifs { display:block; }
-    #side, #notifs { position:fixed; top:2.6em; bottom:0; z-index:5; width:85vw; display:none; }
-    #side { left:0; } #notifs { right:0; }
-    body.show-side #side, body.show-notifs #notifs { display:block; }
+    #side { position:fixed; top:2.6em; bottom:0; left:0; z-index:5; width:85vw; display:none; }
+    body.show-side #side { display:block; }
+    #notifs { left:8px; right:8px; width:auto; }
     /* Phones: stack every pane, each tall enough to read. */
     #panes { overflow-y:auto; display:block; }
     .split, .split.h, .split.v { display:block; }
@@ -74,8 +103,7 @@
   <button id="toggleSide">☰</button>
   <h1 id="title">cmux web remote</h1>
   <span id="status" class="bad">connecting</span>
-  <button id="enableNotify" title="Show browser notifications">🔔</button>
-  <button id="toggleNotifs">✉ <span id="unreadCount">0</span></button>
+  <button id="bell" title="Notifications"><svg viewBox="0 0 16 16"><path fill="currentColor" d="M8 15.5a2 2 0 0 0 2-2H6a2 2 0 0 0 2 2zm5.5-4.2-1-1.3V7a4.5 4.5 0 0 0-3.6-4.4V2a.9.9 0 1 0-1.8 0v.6A4.5 4.5 0 0 0 3.5 7v3l-1 1.3a.6.6 0 0 0 .5 1h10a.6.6 0 0 0 .5-1z"/></svg><span id="unreadCount" class="badge" hidden>0</span></button>
 </header>
 <main>
   <nav id="side"><input id="filter" type="search" placeholder="Filter workspaces"><div id="wslist"><div class="empty">Loading…</div></div></nav>
@@ -101,8 +129,9 @@
     </div>
   </section>
   <aside id="notifs">
-    <h2>Notifications <button id="readAll" style="font-size:.8em">Mark all read</button></h2>
-    <div id="nlist"><div class="empty">None</div></div>
+    <div class="head"><h2>Notifications</h2><button id="jumpUnread" title="Jump to Latest Unread">Jump to Latest Unread</button><button id="clearAll">Clear All</button></div>
+    <div id="nlist"></div>
+    <div class="foot">Browser notifications: <button id="enableNotify">Enable</button></div>
   </aside>
 </main>
 <script>
@@ -115,6 +144,7 @@ const state = {
   activePane: null,    // pane that receives typed input
   screens: {},         // surfaceId -> {revision, grid?, text?}
   notifications: [],
+  expanded: new Set(), // workspaces whose status list shows all pills
   poll: null,          // {key, abort}
   zoomPane: null,      // pane shown alone, when zoomed
 };
@@ -135,6 +165,55 @@ function el(tag, props, ...children) {
   return node;
 }
 
+// ---- SF Symbols used by sidebar rows, as small SVGs ------------------------
+const SYMBOLS = {
+  "bolt.fill": '<path d="M9.5 0 2.5 9h4.2L5.8 16l7.2-9.5H8.6z"/>',
+  "circle.fill": '<circle cx="8" cy="8" r="6"/>',
+  "checkmark.circle.fill": '<path fill-rule="evenodd" d="M8 1a7 7 0 1 1 0 14A7 7 0 0 1 8 1zm3.3 4.4-4.2 4.3-2.4-2.4-1 1 3.4 3.4 5.2-5.3z"/>',
+  "pause.circle.fill": '<path fill-rule="evenodd" d="M8 1a7 7 0 1 1 0 14A7 7 0 0 1 8 1zM5.6 5v6h1.6V5zm3.2 0v6h1.6V5z"/>',
+  "xmark.circle.fill": '<path fill-rule="evenodd" d="M8 1a7 7 0 1 1 0 14A7 7 0 0 1 8 1zM5.5 4.4 4.4 5.5 6.9 8l-2.5 2.5 1.1 1.1L8 9.1l2.5 2.5 1.1-1.1L9.1 8l2.5-2.5-1.1-1.1L8 6.9z"/>',
+  "exclamationmark.triangle.fill": '<path fill-rule="evenodd" d="M8 1 .5 14.5h15zm-.8 4.5h1.6l-.2 5h-1.2zM8 11.5a.9.9 0 1 1 0 1.8.9.9 0 0 1 0-1.8z"/>',
+  "arrowtriangle.right.fill": '<path d="M4 2v12l9-6z"/>',
+  "pin.fill": '<path d="M10.8 1 15 5.2l-1.1 1.1-.8-.3-2.5 2.5.3 3.2-1.2 1.2-2.9-2.9L3 13.8 2.2 13l3.8-3.8-2.9-2.9 1.2-1.2 3.2.3L10 2.9l-.3-.8z"/>',
+  "arrow.triangle.branch": '<path d="M4 1.5a2 2 0 0 1 .8 3.8v1.9C5.9 6.4 7.3 6 9 6h.3a2 2 0 1 1 0 1.5H9c-2.4 0-3.6 1-4.2 2v1.2a2 2 0 1 1-1.6 0V5.3A2 2 0 0 1 4 1.5z"/>',
+};
+function symbol(name, color) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("fill", "currentColor");
+  svg.innerHTML = SYMBOLS[name] || SYMBOLS["circle.fill"];
+  if (color) svg.style.color = color;
+  return svg;
+}
+// A status pill's icon: "emoji:x", "text:x", "sf:name" or a bare SF Symbol name.
+function statusIcon(icon, color) {
+  if (!icon) return null;
+  if (icon.startsWith("emoji:") || icon.startsWith("text:")) {
+    return el("b", { textContent: icon.slice(icon.indexOf(":") + 1), style: "font-size:9px;flex:none;" + (color ? "color:" + color : "") });
+  }
+  return symbol(icon.replace(/^sf:/, ""), color);
+}
+// cmux renders Markdown in descriptions and strips it from notification previews.
+function plainMarkdown(text) {
+  return String(text || "").replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/(\*\*|__|`)/g, "");
+}
+function markdownInline(text) {
+  const frag = document.createDocumentFragment();
+  const re = /\[([^\]]+)\]\((https?:[^)\s]+)\)|\*\*([^*]+)\*\*|`([^`]+)`/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    frag.append(text.slice(last, m.index));
+    if (m[1]) frag.append(el("a", { href: m[2], target: "_blank", rel: "noopener", textContent: m[1], onclick: (e) => e.stopPropagation() }));
+    else if (m[3]) frag.append(el("b", { textContent: m[3] }));
+    else frag.append(el("code", { textContent: m[4] }));
+    last = re.lastIndex;
+  }
+  frag.append(text.slice(last));
+  return frag;
+}
+const LOG_ICONS = { info: "circle.fill", progress: "arrowtriangle.right.fill", success: "checkmark.circle.fill", warning: "exclamationmark.triangle.fill", error: "xmark.circle.fill" };
+const LOG_COLORS = { warning: "#FF9F0A", error: "#FF453A", success: "#32D74B" };
+
 // ---- model helpers ----------------------------------------------------------
 function allWorkspaces() {
   return ((state.tree && state.tree.windows) || []).flatMap((w) => w.workspaces);
@@ -152,8 +231,10 @@ function findSurface(surfaceId) {
     if (s.id === surfaceId) return { ws, pane, surface: s };
   return null;
 }
-function unreadFor(wsId) {
-  return state.notifications.filter((n) => !n.is_read && n.workspace_id === wsId).length;
+function unreadFor(ws) {
+  // cmux's own count wins; the notification list fills in between tree reloads.
+  const listed = state.notifications.filter((n) => !n.is_read && n.workspace_id === ws.id).length;
+  return Math.max(ws.unread_count || 0, listed);
 }
 
 // ---- sidebar ----------------------------------------------------------------
@@ -172,7 +253,7 @@ async function loadTree() {
 function matchesFilter(ws, needle) {
   if (!needle) return true;
   const titles = ws.panes.flatMap((p) => p.surfaces.map((s) => s.title));
-  return [ws.title, ws.current_directory, ws.latest_message, ...titles].join("\n").toLowerCase().includes(needle);
+  return [ws.title, ws.description, ws.directory, ws.branch, ws.latest_notification_text, ...titles].join("\n").toLowerCase().includes(needle);
 }
 
 function renderTree() {
@@ -184,17 +265,8 @@ function renderTree() {
     if (windows.length > 1) side.append(el("div", { className: "ws-meta", style: "padding:.4em .7em", textContent: "Window " + (wi + 1) }));
     for (const ws of win.workspaces) {
       if (!matchesFilter(ws, needle)) continue;
-      const unread = unreadFor(ws.id);
-      const tabs = ws.panes.reduce((n, p) => n + p.surfaces.length, 0);
-      const box = el("div", { className: "ws" + (ws.id === state.wsId ? " active" : "") },
-        el("div", { className: "ws-title" },
-          el("span", { className: "name", textContent: ws.title || ws.ref || "workspace" }),
-          ws.selected ? el("span", { className: "sel", textContent: "● on Mac" }) : null,
-          unread ? el("span", { className: "badge", textContent: String(unread) }) : null),
-        el("div", { className: "ws-meta", textContent: `${ws.panes.length} pane${ws.panes.length === 1 ? "" : "s"} · ${tabs} tab${tabs === 1 ? "" : "s"}` + (ws.current_directory ? " · " + ws.current_directory : "") }),
-        ws.latest_message ? el("div", { className: "ws-meta", textContent: "› " + ws.latest_message }) : null);
-      box.onclick = () => { openWorkspace(ws.id); document.body.classList.remove("show-side"); };
-      side.append(box);
+      side.append(sidebarRow(ws));
+      continue;
     }
   });
   const add = el("button", { textContent: "+ New workspace", style: "margin:.7em" });
@@ -206,6 +278,58 @@ function renderTree() {
     loadTree();
   };
   side.append(add);
+}
+
+function sidebarRow(ws) {
+  const sb = ws.sidebar || {};
+  const box = el("div", { className: "ws" + (ws.id === state.wsId ? " active" : "") + (ws.selected ? " mac" : ""),
+    title: ws.selected ? "Shown on the Mac" : "" });
+  if (ws.custom_color) box.append(el("i", { className: "rail", style: "background:" + ws.custom_color }));
+  const unread = unreadFor(ws);
+  const title = el("div", { className: "ws-title" });
+  if (unread) title.append(el("span", { className: "badge", textContent: String(unread) }));
+  if (ws.pinned) { const pin = symbol("pin.fill"); pin.classList.add("ico"); title.append(pin); }
+  title.append(el("span", { className: "name", textContent: ws.title || ws.ref || "workspace" }));
+  box.append(title);
+  if (ws.description) box.append(el("div", { className: "desc" }, markdownInline(ws.description)));
+  if (ws.latest_notification_text) box.append(el("div", { className: "sub", textContent: plainMarkdown(ws.latest_notification_text).trim() }));
+  const statuses = sb.statuses || [];
+  const showAll = state.expanded.has(ws.id);
+  for (const st of showAll ? statuses : statuses.slice(0, 3)) {
+    const text = st.format === "markdown" ? markdownInline(st.value) : st.value;
+    const label = st.url && st.format !== "markdown"
+      ? el("a", { href: st.url, target: "_blank", rel: "noopener", textContent: st.value, onclick: (e) => e.stopPropagation() })
+      : el("span", {}, text);
+    if (st.color) label.style.color = st.color;
+    box.append(el("div", { className: "line" }, statusIcon(st.icon, st.color), label));
+  }
+  if (statuses.length > 3) {
+    const more = el("div", { className: "more", textContent: showAll ? "Show less" : "Show more" });
+    more.onclick = (e) => { e.stopPropagation(); showAll ? state.expanded.delete(ws.id) : state.expanded.add(ws.id); renderTree(); };
+    box.append(more);
+  }
+  if (sb.log) {
+    const color = LOG_COLORS[sb.log.level] || (sb.log.level === "info" ? "rgba(var(--p),.5)" : "rgba(var(--p),.8)");
+    box.append(el("div", { className: "line" }, symbol(LOG_ICONS[sb.log.level] || "circle.fill", color), el("span", { textContent: sb.log.message })));
+  }
+  if (sb.progress) {
+    const bar = el("div", { className: "bar", title: sb.progress.label || "" }, el("i", { style: `width:${Math.round(sb.progress.value * 100)}%` }));
+    box.append(bar);
+    if (sb.progress.label) box.append(el("div", { className: "line" }, el("span", { textContent: sb.progress.label })));
+  }
+  if (ws.branch) box.append(el("div", { className: "mono", textContent: ws.branch + (ws.git_dirty || sb.git_dirty ? "*" : "") }));
+  if (ws.directory) box.append(el("div", { className: "mono", textContent: ws.directory }));
+  const links = el("div", { className: "links" });
+  for (const url of ws.pull_requests || []) {
+    const num = (url.match(/\/pull\/(\d+)/) || [])[1];
+    links.append(el("a", { href: url, target: "_blank", rel: "noopener", textContent: num ? "PR #" + num : "PR", onclick: (e) => e.stopPropagation() }));
+  }
+  for (const port of ws.ports || []) {
+    links.append(el("a", { href: `${location.protocol}//${location.hostname}:${port}`, target: "_blank", rel: "noopener", textContent: ":" + port, onclick: (e) => e.stopPropagation() }));
+  }
+  if (links.childNodes.length) box.append(links);
+  box.onclick = () => { openWorkspace(ws.id); document.body.classList.remove("show-side"); };
+  return box;
 }
 
 function openWorkspace(wsId, paneId, surfaceId) {
@@ -243,6 +367,25 @@ function renderWorkspace() {
   }
   updateTarget();
   restartPolling();
+  markPaneRead();
+}
+
+// Focusing a pane in cmux marks its notifications read; opening a workspace
+// marks its workspace-level ones. Do the same for the pane picked here.
+function markPaneRead() {
+  const ws = currentWorkspace();
+  const pane = ws && ws.panes.find((p) => p.id === state.activePane);
+  const shown = pane && shownSurface(pane);
+  const unread = state.notifications.filter((n) => !n.is_read && n.workspace_id === (ws && ws.id));
+  const forPane = shown && unread.some((n) => n.surface_id === shown.id);
+  const forWorkspace = unread.some((n) => !n.surface_id);
+  if (!forPane && !forWorkspace) return;
+  for (const n of unread) if (!n.surface_id || (shown && n.surface_id === shown.id)) n.is_read = true;
+  renderNotifications();
+  const calls = [];
+  if (forPane) calls.push(api("/api/notifications/read", { workspace_id: ws.id, surface_id: shown.id }));
+  if (forWorkspace) for (const n of unread.filter((x) => !x.surface_id)) calls.push(api("/api/notifications/read", { id: n.id }));
+  Promise.allSettled(calls).then(() => { scheduleTree(); });
 }
 
 function buildLayout(node, panesById, seen) {
@@ -286,6 +429,7 @@ function buildPane(pane) {
     document.querySelectorAll(".pane.active").forEach((p) => p.classList.remove("active"));
     box.classList.add("active");
     updateTarget();
+    markPaneRead();
   };
   if (shown && shown.type === "terminal") {
     const pre = el("pre", { className: "term" });
@@ -455,26 +599,53 @@ function renderNotifications() {
   list.replaceChildren();
   const unread = state.notifications.filter((n) => !n.is_read).length;
   $("unreadCount").textContent = unread;
+  $("unreadCount").hidden = !unread;
   document.title = (unread ? "(" + unread + ") " : "") + "cmux web remote";
-  if (!state.notifications.length) { list.append(el("div", { className: "empty", textContent: "None" })); return; }
+  $("jumpUnread").hidden = $("clearAll").hidden = !state.notifications.length;
+  $("jumpUnread").disabled = !unread;
+  if (!state.notifications.length) {
+    list.append(el("div", { className: "n-empty" }, el("b", { textContent: "No notifications yet" }),
+      "Desktop notifications will appear here for quick review."));
+    return;
+  }
   for (const n of state.notifications) {
-    const item = el("div", { className: "n" + (n.is_read ? "" : " unread") },
-      el("div", { className: "nt", textContent: n.title || "(no title)" }),
-      n.subtitle ? el("div", { className: "nb", textContent: n.subtitle }) : null,
-      n.body ? el("div", { className: "nb clamp", textContent: n.body, title: "Click to expand",
-        onclick: (e) => { e.stopPropagation(); item.classList.toggle("open"); } }) : null,
-      el("div", { className: "nm", textContent: [n.tab_title, n.created_at && new Date(n.created_at).toLocaleString()].filter(Boolean).join(" · ") }));
-    item.onclick = async () => {
-      jumpTo(n);
-      document.body.classList.remove("show-notifs");
-      if (!n.is_read) { try { await api("/api/notifications/read", { id: n.id }); } catch (e) {} loadNotifications(); }
+    const clear = el("button", { className: "x", textContent: "✕", title: "Clear notification" });
+    clear.onclick = async (e) => {
+      e.stopPropagation();
+      state.notifications = state.notifications.filter((x) => x.id !== n.id);
+      renderNotifications();
+      try { await api("/api/notifications/dismiss", { id: n.id }); } catch (err) {}
+      loadNotifications();
+      scheduleTree();
     };
+    const time = n.created_at ? new Date(n.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+    const item = el("div", { className: "n" + (n.is_read ? "" : " unread") },
+      el("span", { className: "dot" }),
+      el("div", { className: "main" },
+        el("div", { className: "top" }, el("span", { className: "nt", textContent: n.title || "(no title)" }), el("span", { className: "time", textContent: time })),
+        n.body || n.subtitle ? el("div", { className: "nb", textContent: plainMarkdown([n.subtitle, n.body].filter(Boolean).join("\n")).trim() }) : null,
+        n.tab_title ? el("div", { className: "tab", textContent: n.tab_title }) : null),
+      clear);
+    item.onclick = () => { jumpTo(n); document.body.classList.remove("show-notifs"); };
     list.append(item);
   }
 }
 
 $("filter").addEventListener("input", renderTree);
-$("readAll").onclick = async () => { await api("/api/notifications/read", { all: true }); loadNotifications(); };
+$("bell").onclick = (e) => { e.stopPropagation(); document.body.classList.toggle("show-notifs"); };
+$("notifs").onclick = (e) => e.stopPropagation();
+document.addEventListener("click", () => document.body.classList.remove("show-notifs"));
+$("jumpUnread").onclick = () => {
+  const n = state.notifications.find((x) => !x.is_read);  // newest first
+  if (n) { jumpTo(n); document.body.classList.remove("show-notifs"); }
+};
+$("clearAll").onclick = async () => {
+  state.notifications = [];
+  renderNotifications();
+  try { await api("/api/notifications/clear_all", {}); } catch (e) {}
+  loadNotifications();
+  scheduleTree();
+};
 
 function showBrowserNotification(n) {
   if (!n || !("Notification" in window) || Notification.permission !== "granted") return;
@@ -503,9 +674,16 @@ function connectEvents() {
       if (m.connected) { loadTree(); loadNotifications(); }
       return;
     }
+    if (m.type === "sidebar") {
+      // Status pills, log or progress of one row changed.
+      const ws = allWorkspaces().find((w) => w.id === m.workspace_id);
+      if (ws) { ws.sidebar = m.sidebar; renderTree(); }
+      return;
+    }
     if (m.category === "notification") {
       if (m.name === "notification.created") showBrowserNotification(m.notification);
       loadNotifications();
+      scheduleTree();  // unread counts and the row's notification preview
     } else if (m.category === "workspace" || m.category === "surface") {
       scheduleTree();
     }
@@ -514,11 +692,6 @@ function connectEvents() {
 }
 
 $("toggleSide").onclick = () => document.body.classList.toggle("show-side");
-$("toggleNotifs").onclick = () => {
-  // Phones: slide the panel over the page. Desktop: hide it to widen the panes.
-  if (matchMedia("(max-width: 900px)").matches) document.body.classList.toggle("show-notifs");
-  else document.body.classList.toggle("hide-notifs");
-};
 
 loadTree();
 loadNotifications();
