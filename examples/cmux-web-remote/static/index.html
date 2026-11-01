@@ -9,32 +9,43 @@
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui,-apple-system,sans-serif; height:100dvh; display:flex; flex-direction:column; }
   header { display:flex; align-items:center; gap:.6em; padding:.5em .8em; border-bottom:1px solid var(--line); }
-  header h1 { font-size:1em; margin:0; flex:1; }
-  #status { font-size:.85em; color:var(--mute); }
+  header h1 { font-size:1em; margin:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #status { font-size:.85em; color:var(--mute); white-space:nowrap; }
   #status.ok::before { content:"● "; color:#4caf50; }
   #status.bad::before { content:"● "; color:#e55; }
   button { background:#2a2a2a; color:var(--fg); border:1px solid #3a3a3a; border-radius:6px; padding:.35em .7em; font:inherit; cursor:pointer; }
   button:hover { border-color:var(--acc); }
   main { flex:1; display:flex; min-height:0; }
-  #side { width:280px; border-right:1px solid var(--line); overflow-y:auto; overflow-x:hidden; background:var(--panel); }
+  #side { width:280px; flex:none; border-right:1px solid var(--line); overflow-y:auto; overflow-x:hidden; background:var(--panel); }
   #filter { position:sticky; top:0; z-index:1; width:100%; padding:.5em .7em; background:#141414; color:var(--fg); border:0; border-bottom:1px solid var(--line); font:inherit; }
   #view { flex:1; display:flex; flex-direction:column; min-width:0; }
-  .ws { border-bottom:1px solid var(--line); padding:.5em .7em; }
+  .ws { border-bottom:1px solid var(--line); padding:.5em .7em; cursor:pointer; border-left:3px solid transparent; }
+  .ws.active { background:#1e2a3a; border-left-color:var(--acc); }
   .ws-title { display:flex; align-items:center; gap:.4em; font-weight:600; }
-  .ws-title .sel { color:var(--acc); font-size:.8em; }
+  .ws-title .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ws-title .sel { color:var(--acc); font-size:.8em; white-space:nowrap; }
   .ws-title .badge { background:var(--warn); color:#000; border-radius:9px; padding:0 .45em; font-size:.75em; }
   .ws-meta { color:var(--mute); font-size:.8em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .surf { display:block; width:100%; text-align:left; margin-top:.3em; background:none; border:1px solid transparent; padding:.25em .4em; }
-  .surf.active { border-color:var(--acc); background:#1e2a3a; }
-  .surf .t { color:var(--mute); font-size:.8em; }
-  .ws-actions { margin-top:.3em; }
-  .ws-actions button { font-size:.8em; padding:.15em .5em; }
-  #screen { flex:1; margin:0; padding:.6em; overflow:auto; font:12px/1.25 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre; background:#0b0b0b; }
+  #panes { flex:1; display:flex; min-height:0; background:#000; }
+  .split { display:flex; flex:1; min-width:0; min-height:0; gap:2px; }
+  .split.h { flex-direction:row; } .split.v { flex-direction:column; }
+  .pane { display:flex; flex-direction:column; min-width:0; min-height:0; border:1px solid #222; }
+  .pane.active { border-color:var(--acc); }
+  .tabs { display:flex; gap:1px; background:#161616; overflow-x:auto; flex:none; }
+  .tab { border:0; border-radius:0; background:none; color:var(--mute); padding:.25em .7em; font-size:.8em; white-space:nowrap; max-width:16em; overflow:hidden; text-overflow:ellipsis; }
+  .tab.on { color:var(--fg); background:#262626; box-shadow:inset 0 -2px var(--acc); }
+  .tab.mac::after { content:" ●"; color:var(--acc); }
+  .zoom { margin-left:auto; border:0; background:none; color:var(--mute); padding:0 .6em; font-size:.9em; flex:none; }
+  body.hide-notifs #notifs { display:none; }
+  .term { flex:1; margin:0; padding:.3em .4em; overflow:auto; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; line-height:1.2; white-space:pre; }
+  .term .cur { outline:1px solid currentColor; }
+  .note { flex:1; display:flex; align-items:center; justify-content:center; color:var(--mute); padding:1em; text-align:center; word-break:break-all; }
   #bar { display:flex; flex-wrap:wrap; gap:.4em; padding:.5em; border-top:1px solid var(--line); background:var(--panel); }
+  #target { width:100%; font-size:.8em; color:var(--mute); }
   #input { flex:1 1 240px; min-height:2.4em; max-height:8em; background:#0f0f0f; color:var(--fg); border:1px solid #3a3a3a; border-radius:6px; padding:.4em; font:13px ui-monospace,Menlo,monospace; resize:vertical; }
   #keys { display:flex; flex-wrap:wrap; gap:.3em; width:100%; }
   #keys button { font-size:.85em; }
-  #notifs { width:320px; border-left:1px solid var(--line); overflow:auto; background:var(--panel); }
+  #notifs { width:320px; flex:none; border-left:1px solid var(--line); overflow:auto; background:var(--panel); }
   #notifs h2 { font-size:.95em; margin:.6em .7em; display:flex; justify-content:space-between; align-items:center; }
   .n { padding:.5em .7em; border-top:1px solid var(--line); cursor:pointer; }
   .n.unread { border-left:3px solid var(--warn); }
@@ -44,12 +55,17 @@
   .n.open .nb.clamp { display:block; cursor:zoom-out; }
   .n .nm { color:var(--mute); font-size:.75em; }
   .empty { color:var(--mute); padding:1em; }
-  #toggleSide, #toggleNotifs { display:none; }
+  #toggleSide { display:none; }
   @media (max-width: 900px) {
-    #toggleSide, #toggleNotifs { display:inline-block; }
+    #toggleSide { display:inline-block; }
+    body.hide-notifs.show-notifs #notifs { display:block; }
     #side, #notifs { position:fixed; top:2.6em; bottom:0; z-index:5; width:85vw; display:none; }
     #side { left:0; } #notifs { right:0; }
     body.show-side #side, body.show-notifs #notifs { display:block; }
+    /* Phones: stack every pane, each tall enough to read. */
+    #panes { overflow-y:auto; display:block; }
+    .split, .split.h, .split.v { display:block; }
+    .pane { flex:none !important; height:60vh; margin-bottom:4px; }
   }
 </style>
 </head>
@@ -64,8 +80,9 @@
 <main>
   <nav id="side"><input id="filter" type="search" placeholder="Filter workspaces"><div id="wslist"><div class="empty">Loading…</div></div></nav>
   <section id="view">
-    <pre id="screen">Pick a terminal on the left.</pre>
+    <div id="panes"><div class="empty">Pick a workspace on the left.</div></div>
     <div id="bar">
+      <div id="target">Click a terminal pane to type into it.</div>
       <textarea id="input" placeholder="Type text, Enter sends it with a newline, Shift+Enter for a new line"></textarea>
       <button id="sendBtn">Send ⏎</button>
       <button id="sendRawBtn" title="Send without pressing Enter">Send</button>
@@ -79,7 +96,7 @@
         <button data-key="left">←</button>
         <button data-key="right">→</button>
         <button data-key="ctrl+d">Ctrl‑D</button>
-        <label style="margin-left:auto;font-size:.85em;color:var(--mute)"><input type="checkbox" id="follow" checked> follow</label>
+        <button id="showOnMac" style="margin-left:auto" title="Switch the Mac's window to this workspace">Show on Mac</button>
       </div>
     </div>
   </section>
@@ -91,10 +108,19 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const state = { tree: null, surfaceId: null, revision: null, pollToken: 0, notifications: [] };
+const state = {
+  tree: null,
+  wsId: null,          // workspace shown in the main area
+  shown: {},           // paneId -> surfaceId picked here (defaults to the Mac's tab)
+  activePane: null,    // pane that receives typed input
+  screens: {},         // surfaceId -> {revision, grid?, text?}
+  notifications: [],
+  poll: null,          // {key, abort}
+  zoomPane: null,      // pane shown alone, when zoomed
+};
 
-async function api(path, body) {
-  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+async function api(path, body, signal) {
+  const opts = body === undefined ? { signal } : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal };
   const res = await fetch(path, opts);
   if (res.status === 401) { location.href = "/"; throw new Error("unauthorized"); }
   const data = await res.json();
@@ -109,22 +135,44 @@ function el(tag, props, ...children) {
   return node;
 }
 
-// ---- workspaces -----------------------------------------------------------
-async function loadTree() {
-  try {
-    state.tree = await api("/api/tree");
-    renderTree();
-  } catch (e) { $("wslist").replaceChildren(el("div", { className: "empty", textContent: "Error: " + e.message })); }
+// ---- model helpers ----------------------------------------------------------
+function allWorkspaces() {
+  return ((state.tree && state.tree.windows) || []).flatMap((w) => w.workspaces);
 }
-
+function currentWorkspace() {
+  return allWorkspaces().find((w) => w.id === state.wsId) || null;
+}
+function shownSurface(pane) {
+  const picked = state.shown[pane.id];
+  if (picked && pane.surfaces.some((s) => s.id === picked)) return pane.surfaces.find((s) => s.id === picked);
+  return pane.surfaces.find((s) => s.id === pane.selected_surface_id) || pane.surfaces[0] || null;
+}
+function findSurface(surfaceId) {
+  for (const ws of allWorkspaces()) for (const pane of ws.panes) for (const s of pane.surfaces)
+    if (s.id === surfaceId) return { ws, pane, surface: s };
+  return null;
+}
 function unreadFor(wsId) {
   return state.notifications.filter((n) => !n.is_read && n.workspace_id === wsId).length;
 }
 
+// ---- sidebar ----------------------------------------------------------------
+async function loadTree() {
+  try {
+    state.tree = await api("/api/tree");
+    if (!currentWorkspace()) {
+      const onMac = allWorkspaces().find((w) => w.selected) || allWorkspaces()[0];
+      state.wsId = onMac ? onMac.id : null;
+    }
+    renderTree();
+    renderWorkspace();
+  } catch (e) { $("wslist").replaceChildren(el("div", { className: "empty", textContent: "Error: " + e.message })); }
+}
+
 function matchesFilter(ws, needle) {
   if (!needle) return true;
-  const hay = [ws.title, ws.current_directory, ws.latest_message, ...ws.surfaces.map((s) => s.title)].join("\n").toLowerCase();
-  return hay.includes(needle);
+  const titles = ws.panes.flatMap((p) => p.surfaces.map((s) => s.title));
+  return [ws.title, ws.current_directory, ws.latest_message, ...titles].join("\n").toLowerCase().includes(needle);
 }
 
 function renderTree() {
@@ -137,23 +185,15 @@ function renderTree() {
     for (const ws of win.workspaces) {
       if (!matchesFilter(ws, needle)) continue;
       const unread = unreadFor(ws.id);
-      const title = el("div", { className: "ws-title" },
-        el("span", { textContent: ws.title || ws.ref || "workspace" }),
-        ws.selected ? el("span", { className: "sel", textContent: "● on screen" }) : null,
-        unread ? el("span", { className: "badge", textContent: String(unread) }) : null);
-      const box = el("div", { className: "ws" }, title);
-      if (ws.current_directory) box.append(el("div", { className: "ws-meta", textContent: ws.current_directory }));
-      if (ws.latest_message) box.append(el("div", { className: "ws-meta", textContent: "› " + ws.latest_message }));
-      for (const s of ws.surfaces) {
-        if (s.type && s.type !== "terminal") continue;
-        const b = el("button", { className: "surf" + (s.id === state.surfaceId ? " active" : "") },
-          el("span", { textContent: s.title || s.ref }), " ", el("span", { className: "t", textContent: s.ref || "" }));
-        b.onclick = () => { selectSurface(s.id, ws.title + " / " + (s.title || s.ref)); document.body.classList.remove("show-side"); };
-        box.append(b);
-      }
-      const show = el("button", { textContent: "Show on Mac", title: "Switch the Mac's window to this workspace" });
-      show.onclick = async () => { await api("/api/workspace/select", { workspace_id: ws.id }); loadTree(); };
-      box.append(el("div", { className: "ws-actions" }, show));
+      const tabs = ws.panes.reduce((n, p) => n + p.surfaces.length, 0);
+      const box = el("div", { className: "ws" + (ws.id === state.wsId ? " active" : "") },
+        el("div", { className: "ws-title" },
+          el("span", { className: "name", textContent: ws.title || ws.ref || "workspace" }),
+          ws.selected ? el("span", { className: "sel", textContent: "● on Mac" }) : null,
+          unread ? el("span", { className: "badge", textContent: String(unread) }) : null),
+        el("div", { className: "ws-meta", textContent: `${ws.panes.length} pane${ws.panes.length === 1 ? "" : "s"} · ${tabs} tab${tabs === 1 ? "" : "s"}` + (ws.current_directory ? " · " + ws.current_directory : "") }),
+        ws.latest_message ? el("div", { className: "ws-meta", textContent: "› " + ws.latest_message }) : null);
+      box.onclick = () => { openWorkspace(ws.id); document.body.classList.remove("show-side"); };
       side.append(box);
     }
   });
@@ -161,48 +201,222 @@ function renderTree() {
   add.onclick = async () => {
     const cwd = prompt("Working directory (optional)", "");
     if (cwd === null) return;
-    await api("/api/workspace/create", cwd ? { cwd } : {});
+    const r = await api("/api/workspace/create", cwd ? { cwd } : {});
+    state.wsId = r.workspace_id || state.wsId;
     loadTree();
   };
   side.append(add);
 }
 
-// ---- terminal view --------------------------------------------------------
-function selectSurface(id, label) {
-  state.surfaceId = id;
-  state.revision = null;
-  $("title").textContent = label;
-  $("screen").textContent = "Loading…";
+function openWorkspace(wsId, paneId, surfaceId) {
+  if (wsId !== state.wsId) state.zoomPane = null;
+  state.wsId = wsId;
+  state.activePane = paneId || null;
+  if (paneId && surfaceId) state.shown[paneId] = surfaceId;
   renderTree();
-  pollScreen(++state.pollToken);
+  renderWorkspace();
 }
 
-async function pollScreen(token) {
-  while (token === state.pollToken && state.surfaceId) {
-    try {
-      const q = new URLSearchParams({ surface_id: state.surfaceId, lines: "400" });
-      if (state.revision) q.set("after_revision", state.revision);
-      const r = await api("/api/screen?" + q);
-      if (token !== state.pollToken) return;
-      if (r.changed !== false || state.revision === null) {
-        const screen = $("screen");
-        screen.textContent = r.text;
-        if ($("follow").checked) screen.scrollTop = screen.scrollHeight;
+// ---- workspace view: split layout, panes, tabs --------------------------------
+function renderWorkspace() {
+  const ws = currentWorkspace();
+  const root = $("panes");
+  if (!ws) { root.replaceChildren(el("div", { className: "empty", textContent: "Pick a workspace on the left." })); updateTarget(); return; }
+  $("title").textContent = ws.title || ws.ref;
+  const panesById = Object.fromEntries(ws.panes.map((p) => [p.id, p]));
+  if (!state.activePane || !panesById[state.activePane]) {
+    const focused = ws.panes.find((p) => p.focused && (shownSurface(p) || {}).type === "terminal");
+    const anyTerm = ws.panes.find((p) => (shownSurface(p) || {}).type === "terminal");
+    state.activePane = (focused || anyTerm || ws.panes[0] || {}).id || null;
+  }
+  if (state.zoomPane && panesById[state.zoomPane]) {
+    const only = buildPane(panesById[state.zoomPane]);
+    only.style.flex = "1 1 0";
+    root.replaceChildren(only);
+  } else {
+    state.zoomPane = null;
+    const seen = new Set();
+    const node = ws.layout ? buildLayout(ws.layout, panesById, seen) : null;
+    const rest = ws.panes.filter((p) => !seen.has(p.id)).map(buildPane);  // panes the layout did not mention
+    for (const r of rest) r.style.flex = "1 1 0";
+    root.replaceChildren(...[node, ...rest].filter(Boolean));
+  }
+  updateTarget();
+  restartPolling();
+}
+
+function buildLayout(node, panesById, seen) {
+  if (node.pane) {
+    const pane = panesById[node.pane.id];
+    if (!pane) return null;
+    seen.add(pane.id);
+    return buildPane(pane);
+  }
+  const kids = (node.children || []).map((c) => buildLayout(c, panesById, seen)).filter(Boolean);
+  if (kids.length === 1) return kids[0];
+  const box = el("div", { className: "split " + (node.direction === "vertical" ? "v" : "h") });
+  const ratio = typeof node.split === "number" && kids.length === 2 ? node.split : null;
+  kids.forEach((kid, i) => {
+    kid.style.flex = ratio === null ? "1 1 0" : `${i === 0 ? ratio : 1 - ratio} 1 0`;
+    box.append(kid);
+  });
+  return box;
+}
+
+function buildPane(pane) {
+  const shown = shownSurface(pane);
+  const tabs = el("div", { className: "tabs" });
+  for (const s of pane.surfaces) {
+    const t = el("button", {
+      className: "tab" + (shown && s.id === shown.id ? " on" : "") + (s.id === pane.selected_surface_id ? " mac" : ""),
+      textContent: (s.type === "terminal" ? "" : s.type === "browser" ? "🌐 " : "📄 ") + (s.title || s.ref),
+      title: (s.title || "") + (s.id === pane.selected_surface_id ? " (shown on the Mac)" : ""),
+    });
+    t.onclick = (e) => { e.stopPropagation(); state.shown[pane.id] = s.id; state.activePane = pane.id; renderWorkspace(); };
+    tabs.append(t);
+  }
+  const zoomed = state.zoomPane === pane.id;
+  const zoom = el("button", { className: "zoom", textContent: zoomed ? "⤡" : "⤢", title: zoomed ? "Show all panes" : "Show only this pane" });
+  zoom.onclick = (e) => { e.stopPropagation(); state.zoomPane = zoomed ? null : pane.id; state.activePane = pane.id; renderWorkspace(); };
+  tabs.append(zoom);
+  const box = el("div", { className: "pane" + (pane.id === state.activePane ? " active" : "") }, tabs);
+  box.dataset.pane = pane.id;
+  box.onclick = () => {
+    state.activePane = pane.id;
+    document.querySelectorAll(".pane.active").forEach((p) => p.classList.remove("active"));
+    box.classList.add("active");
+    updateTarget();
+  };
+  if (shown && shown.type === "terminal") {
+    const pre = el("pre", { className: "term" });
+    pre.dataset.surface = shown.id;
+    box.append(pre);
+    const cached = state.screens[shown.id];
+    if (cached) paintScreen(pre, cached); else pre.textContent = "Loading…";
+  } else if (shown) {
+    box.append(el("div", { className: "note", textContent: `${shown.type}: ${shown.url || shown.title || ""}\n(not mirrored)` }));
+  }
+  return box;
+}
+
+function activeTerminal() {
+  const ws = currentWorkspace();
+  const pane = ws && ws.panes.find((p) => p.id === state.activePane);
+  const s = pane && shownSurface(pane);
+  return s && s.type === "terminal" ? s : null;
+}
+
+function updateTarget() {
+  const s = activeTerminal();
+  $("target").textContent = s ? "Typing into: " + (s.title || s.ref) : "Click a terminal pane to type into it.";
+}
+
+// ---- terminal painting ------------------------------------------------------
+function fitFont(pre, columns) {
+  const width = pre.clientWidth - 10;
+  if (!columns || width <= 0) return;
+  // Menlo / SF Mono advance is about 0.6em.
+  pre.style.fontSize = Math.max(7, Math.min(13, width / (columns * 0.6))) + "px";
+}
+
+function paintScreen(pre, screen) {
+  const stick = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40 || !pre.dataset.painted;
+  if (screen.grid) paintGrid(pre, screen.grid);
+  else { pre.style.color = ""; pre.style.background = ""; pre.textContent = screen.text || (screen.error ? "[" + screen.error + "]" : ""); }
+  pre.dataset.painted = "1";
+  if (stick) pre.scrollTop = pre.scrollHeight;
+}
+
+function paintGrid(pre, grid) {
+  pre.style.color = grid.foreground;
+  pre.style.background = grid.background;
+  fitFont(pre, grid.columns);
+  const frag = document.createDocumentFragment();
+  const cur = grid.cursor || {};
+  grid.lines.forEach((spans, lineNo) => {
+    let col = 0;
+    let pending = "";
+    const flush = () => { if (pending) { frag.append(pending); pending = ""; } };
+    const styled = (text, sid, extraClass) => {
+      const css = grid.styles[String(sid)] || "";
+      if (!css && !extraClass) { pending += text; return; }
+      flush();
+      const span = document.createElement("span");
+      if (css) span.style.cssText = css;
+      if (extraClass) span.className = extraClass;
+      span.textContent = text;
+      frag.append(span);
+    };
+    const cursorCol = cur.visible && cur.line === lineNo ? cur.column : -1;
+    for (const [c, w, text, sid] of spans) {
+      if (c > col) { pending += " ".repeat(c - col); col = c; }
+      if (cursorCol >= col && cursorCol < c + w) {
+        // Split the span around the cursor cell.
+        const chars = [...text];
+        const cw = chars.length ? w / chars.length : 1;
+        const at = Math.min(chars.length - 1, Math.floor((cursorCol - c) / cw));
+        if (at > 0) styled(chars.slice(0, at).join(""), sid);
+        styled(chars[at] || " ", sid, "cur");
+        if (at + 1 < chars.length) styled(chars.slice(at + 1).join(""), sid);
+      } else {
+        styled(text, sid);
       }
-      state.revision = r.revision;
+      col = c + w;
+    }
+    if (cursorCol >= col) { pending += " ".repeat(cursorCol - col); styled(" ", 0, "cur"); }
+    pending += "\n";
+    flush();
+  });
+  pre.replaceChildren(frag);
+}
+
+// ---- polling every visible terminal in one long-poll -------------------------
+function visibleTerminals() {
+  return [...document.querySelectorAll("#panes pre.term")].map((p) => p.dataset.surface);
+}
+
+function restartPolling() {
+  const ids = visibleTerminals();
+  const key = ids.join(",");
+  if (state.poll && state.poll.key === key) return;
+  if (state.poll) state.poll.abort.abort();
+  if (!ids.length) { state.poll = null; return; }
+  state.poll = { key, abort: new AbortController() };
+  pollLoop(state.poll, ids);
+}
+
+async function pollLoop(poll, ids) {
+  while (state.poll === poll) {
+    const surfaces = Object.fromEntries(ids.map((id) => [id, (state.screens[id] || {}).revision || ""]));
+    try {
+      const r = await api("/api/screens", { surfaces }, poll.abort.signal);
+      if (state.poll !== poll) return;
+      for (const [id, screen] of Object.entries(r.screens)) {
+        if (!screen.changed) continue;
+        state.screens[id] = screen;
+        document.querySelectorAll(`pre.term[data-surface="${id}"]`).forEach((pre) => paintScreen(pre, screen));
+      }
     } catch (e) {
-      if (token !== state.pollToken) return;
-      $("screen").textContent += "\n[" + e.message + ", retrying]";
+      if (state.poll !== poll || e.name === "AbortError") return;
       await new Promise((ok) => setTimeout(ok, 3000));
     }
   }
 }
 
+new ResizeObserver(() => {
+  for (const pre of document.querySelectorAll("#panes pre.term")) {
+    const s = state.screens[pre.dataset.surface];
+    if (s && s.grid) fitFont(pre, s.grid.columns);
+  }
+}).observe($("panes"));
+
+// ---- input -------------------------------------------------------------------
 async function send(enter) {
-  if (!state.surfaceId) return;
+  const s = activeTerminal();
+  if (!s) return;
   const text = $("input").value;
   if (!text && !enter) return;
-  await api("/api/send", { surface_id: state.surfaceId, text, enter });
+  await api("/api/send", { surface_id: s.id, text, enter });
   $("input").value = "";
 }
 
@@ -212,17 +426,28 @@ $("input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(true); }
 });
 for (const b of document.querySelectorAll("#keys button[data-key]")) {
-  b.onclick = () => state.surfaceId && api("/api/key", { surface_id: state.surfaceId, key: b.dataset.key });
+  b.onclick = () => { const s = activeTerminal(); if (s) api("/api/key", { surface_id: s.id, key: b.dataset.key }); };
 }
+$("showOnMac").onclick = async () => {
+  if (!state.wsId) return;
+  await api("/api/workspace/select", { workspace_id: state.wsId });
+  loadTree();
+};
 
-// ---- notifications --------------------------------------------------------
+// ---- notifications ------------------------------------------------------------
 async function loadNotifications() {
   try {
     const r = await api("/api/notifications");
     state.notifications = r.notifications.slice().sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
     renderNotifications();
     if (state.tree) renderTree();
-  } catch (e) { /* status line shows connectivity */ }
+  } catch (e) { /* the status pill shows connectivity */ }
+}
+
+function jumpTo(n) {
+  const hit = n.surface_id && findSurface(n.surface_id);
+  if (hit) openWorkspace(hit.ws.id, hit.pane.id, hit.surface.id);
+  else if (n.workspace_id) openWorkspace(n.workspace_id);
 }
 
 function renderNotifications() {
@@ -240,7 +465,7 @@ function renderNotifications() {
         onclick: (e) => { e.stopPropagation(); item.classList.toggle("open"); } }) : null,
       el("div", { className: "nm", textContent: [n.tab_title, n.created_at && new Date(n.created_at).toLocaleString()].filter(Boolean).join(" · ") }));
     item.onclick = async () => {
-      if (n.surface_id) selectSurface(n.surface_id, n.tab_title || n.title || "terminal");
+      jumpTo(n);
       document.body.classList.remove("show-notifs");
       if (!n.is_read) { try { await api("/api/notifications/read", { id: n.id }); } catch (e) {} loadNotifications(); }
     };
@@ -255,7 +480,7 @@ function showBrowserNotification(n) {
   if (!n || !("Notification" in window) || Notification.permission !== "granted") return;
   if (document.visibilityState === "visible" && document.hasFocus()) return;
   const notice = new Notification(n.title || "cmux", { body: [n.subtitle, n.body].filter(Boolean).join("\n"), tag: n.id });
-  notice.onclick = () => { window.focus(); if (n.surface_id) selectSurface(n.surface_id, n.tab_title || n.title); };
+  notice.onclick = () => { window.focus(); jumpTo(n); };
 }
 
 $("enableNotify").onclick = async () => {
@@ -264,7 +489,7 @@ $("enableNotify").onclick = async () => {
   if (p !== "granted") alert("Browser notifications need HTTPS (or localhost) and permission.");
 };
 
-// ---- live events ----------------------------------------------------------
+// ---- live events ----------------------------------------------------------------
 let treeTimer = null;
 function scheduleTree() { clearTimeout(treeTimer); treeTimer = setTimeout(loadTree, 400); }
 
@@ -289,7 +514,11 @@ function connectEvents() {
 }
 
 $("toggleSide").onclick = () => document.body.classList.toggle("show-side");
-$("toggleNotifs").onclick = () => document.body.classList.toggle("show-notifs");
+$("toggleNotifs").onclick = () => {
+  // Phones: slide the panel over the page. Desktop: hide it to widen the panes.
+  if (matchMedia("(max-width: 900px)").matches) document.body.classList.toggle("show-notifs");
+  else document.body.classList.toggle("hide-notifs");
+};
 
 loadTree();
 loadNotifications();

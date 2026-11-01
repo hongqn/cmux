@@ -3,8 +3,10 @@
 A small web server that lets a browser (phone, tablet, another computer) drive
 the cmux app on your Mac:
 
-- see every window, workspace and terminal
-- read a terminal's screen, live (long-poll on `surface.wait_text_change`)
+- see every window and workspace, with each workspace's split layout: all
+  panes side by side as in cmux, each with its tab bar
+- watch terminals live and in color (cmux's own render grid), with the cursor;
+  zoom one pane to read it full size
 - type text and send keys (Enter, Esc, Ctrl-C, Tab, arrows, Ctrl-D)
 - create a workspace, or switch the Mac's window to one
 - get cmux notifications live, with browser notifications and an unread count
@@ -13,9 +15,12 @@ It uses only the public cmux control socket (v2 JSON lines) and the
 [`events.stream`](../../docs/events.md) subscription. It does not change cmux.
 Python standard library only, so the macOS system `python3` (3.9+) runs it.
 
-It is a prototype. The terminal view is a plain-text snapshot (no colors, no
-cursor). That is fine for watching agents and answering them, but not for
-full-screen TUIs such as vim.
+It is a prototype. Terminals are redrawn from snapshots when their text
+changes (checked every 0.5 s on cmux builds without `surface.wait_text_change`),
+not streamed byte by byte, and keyboard input goes through the text box and key
+buttons rather than straight from the browser keyboard. That is fine for
+watching agents and answering them; full-screen TUIs such as vim are readable
+but clumsy to drive. Browser and Markdown tabs are listed but not mirrored.
 
 ## Run
 
@@ -74,8 +79,8 @@ browser ──HTTP/SSE──▶ server.py ──unix socket──▶ cmux.app
 
 | HTTP | cmux v2 method |
 | --- | --- |
-| `GET /api/tree` | `window.list`, `workspace.list`, `surface.list` |
-| `GET /api/screen?surface_id=&after_revision=` | `surface.wait_text_change` (scrollback, last 400 lines); on cmux builds without it (0.65.x), `surface.read_text` polled every 0.5 s |
+| `GET /api/tree` | `system.tree` (split layout, panes, tabs) plus `workspace.list` (directory, latest message) |
+| `POST /api/screens {surfaces: {id: revision}}` | Waits until any listed terminal changes, then returns its text and colored grid. Change detection: `surface.wait_text_change` for one terminal; `surface.read_text` polled every 0.5 s for several, or on cmux builds without it (0.65.x). Colors: `terminal.replay` |
 | `POST /api/send {surface_id, text, enter}` | `surface.send_text`, then `surface.send_key enter` |
 | `POST /api/key {surface_id, key}` | `surface.send_key` |
 | `POST /api/workspace/select {workspace_id}` | `workspace.select` (switches the Mac's screen too) |
@@ -84,6 +89,13 @@ browser ──HTTP/SSE──▶ server.py ──unix socket──▶ cmux.app
 | `POST /api/notifications/read {id \| all}` | `notification.mark_read` |
 | `POST /api/notifications/dismiss {id}` | `notification.dismiss` |
 | `GET /api/events` (SSE) | `events.stream` |
+
+`terminal.replay` returns cmux's `cmux.render-grid.v1` frame: styled text spans
+with resolved colors, the cursor and up to 240 rows of scrollback. The server
+turns it into a compact `{styles, lines}` form; with gzip a 111×81 terminal is
+about 30 KB per redraw. One `/api/screens` request covers every visible pane,
+because browsers allow only six connections per host. Viewing a hibernated agent
+wakes it, as the iOS app does.
 
 The event stream redacts notification titles and bodies, so on
 `notification.created` the server looks the notification up with

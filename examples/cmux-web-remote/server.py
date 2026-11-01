@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import hashlib
 import hmac
 import http.server
@@ -43,6 +44,8 @@ WAIT_TIMEOUT_MS = 25000
 FALLBACK_POLL_SECONDS = 0.5
 MAX_BODY_BYTES = 256 * 1024
 MAX_SCREEN_LINES = 2000
+# Panes a browser may watch in one /api/screens long-poll.
+MAX_SCREENS = 12
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +86,67 @@ def screen_text(result: Dict[str, Any]) -> str:
         return result["text"]
     raw = result.get("base64")
     return base64.b64decode(raw).decode("utf-8", errors="replace") if raw else ""
+
+
+def compact_grid(grid: Dict[str, Any]) -> Dict[str, Any]:
+    """Shrink a cmux.render-grid.v1 frame (from terminal.replay) for the browser.
+
+    Styles become CSS strings keyed by id; spans become [column, cells, text,
+    style] rows, scrollback first, then the viewport.
+    """
+    term_fg = grid.get("terminal_foreground") or "#FFFFFF"
+    term_bg = grid.get("terminal_background") or "#000000"
+    styles: Dict[str, str] = {}
+    for st in grid.get("styles") or []:
+        fg = st.get("foreground") if st.get("foreground_source", "default") != "default" else None
+        bg = st.get("background") if st.get("background_source", "default") != "default" else None
+        if st.get("inverse"):
+            fg, bg = (bg or term_bg), (fg or term_fg)
+        css = []
+        if fg:
+            css.append("color:" + fg)
+        if bg:
+            css.append("background:" + bg)
+        if st.get("bold"):
+            css.append("font-weight:bold")
+        if st.get("italic"):
+            css.append("font-style:italic")
+        if st.get("faint"):
+            css.append("opacity:.6")
+        deco = [name for key, name in (("underline", "underline"), ("strikethrough", "line-through"),
+                                       ("overline", "overline")) if st.get(key)]
+        if deco:
+            css.append("text-decoration:" + " ".join(deco))
+        if st.get("invisible"):
+            css.append("visibility:hidden")
+        styles[str(st.get("id"))] = ";".join(css)
+
+    scrollback = int(grid.get("scrollback_rows") or 0)
+    rows = int(grid.get("rows") or 0)
+    lines: List[List[List[Any]]] = [[] for _ in range(scrollback + rows)]
+    for offset, key in ((0, "scrollback_spans"), (scrollback, "row_spans")):
+        for span in grid.get(key) or []:
+            index = offset + int(span.get("row", -1))
+            if 0 <= index < len(lines):
+                lines[index].append([span.get("column", 0), span.get("cell_width", 0),
+                                     span.get("text", ""), span.get("style_id", 0)])
+    for line in lines:
+        line.sort(key=lambda item: item[0])
+
+    cursor = grid.get("cursor") or {}
+    return {
+        "columns": grid.get("columns"),
+        "rows": rows,
+        "foreground": term_fg,
+        "background": term_bg,
+        "styles": styles,
+        "lines": lines,
+        "cursor": {
+            "line": scrollback + int(cursor.get("row", 0)),
+            "column": int(cursor.get("column", 0)),
+            "visible": bool(cursor.get("visible", False)),
+        },
+    }
 
 
 def default_socket_path() -> str:
@@ -204,6 +268,50 @@ class CmuxClient:
             if time.monotonic() >= deadline:
                 return {"text": text, "revision": revision, "changed": False}
             time.sleep(FALLBACK_POLL_SECONDS)
+
+    def read_screens(self, revisions: Dict[str, str], lines: int) -> Dict[str, Dict[str, Any]]:
+        """Wait until any of several terminals changes; attach a colored grid.
+
+        One surface uses read_screen (native wait when cmux has it). Several
+        are polled together, so one request covers every visible pane.
+        """
+        if len(revisions) == 1:
+            ((surface_id, after),) = revisions.items()
+            results = {surface_id: self.read_screen(surface_id, lines, after)}
+        else:
+            results = self._poll_screens(revisions, lines)
+        for surface_id, result in results.items():
+            if result.get("changed") and "error" not in result:
+                grid = self.read_grid(surface_id)
+                if grid is not None:
+                    result["grid"] = grid
+        return results
+
+    def _poll_screens(self, revisions: Dict[str, str], lines: int) -> Dict[str, Dict[str, Any]]:
+        deadline = time.monotonic() + WAIT_TIMEOUT_MS / 1000
+        while True:
+            results: Dict[str, Dict[str, Any]] = {}
+            for surface_id, after in revisions.items():
+                params = {"surface_id": surface_id, "scrollback": True, "lines": lines}
+                try:
+                    text = screen_text(self.call("surface.read_text", params) or {})
+                except CmuxError as exc:
+                    results[surface_id] = {"error": exc.code, "message": exc.message, "changed": True}
+                    continue
+                revision = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+                results[surface_id] = {"text": text, "revision": revision, "changed": revision != after}
+            if any(r["changed"] for r in results.values()) or time.monotonic() >= deadline:
+                return results
+            time.sleep(FALLBACK_POLL_SECONDS)
+
+    def read_grid(self, surface_id: str) -> Optional[Dict[str, Any]]:
+        """The colored screen via terminal.replay, or None when unavailable."""
+        try:
+            result = self.call("terminal.replay", {"surface_id": surface_id}) or {}
+        except CmuxError:
+            return None
+        grid = result.get("render_grid")
+        return compact_grid(grid) if isinstance(grid, dict) else None
 
     def open_event_stream(self, after_seq: Optional[int]) -> LineSocket:
         conn = LineSocket(self.socket_path, self.password, timeout=60.0)
@@ -337,38 +445,53 @@ class EventHub:
 
 
 def build_tree(client: CmuxClient) -> Dict[str, Any]:
-    windows = (client.call("window.list") or {}).get("windows") or []
+    """Windows, workspaces, split layouts, panes and tabs in two socket calls.
+
+    system.tree carries the layout and panes; workspace.list adds the
+    directory and latest agent message shown in the sidebar.
+    """
+    snapshot = client.call("system.tree") or {}
     out = []
-    for win in windows:
-        win_id = win.get("id")
-        ws_rows = (client.call("workspace.list", {"window_id": win_id}) or {}).get("workspaces") or []
+    for win in snapshot.get("windows") or []:
+        summaries: Dict[str, Dict[str, Any]] = {}
+        try:
+            rows = (client.call("workspace.list", {"window_id": win.get("id")}) or {}).get("workspaces") or []
+            summaries = {str(row.get("id")): row for row in rows}
+        except CmuxError:
+            pass
         workspaces = []
-        for ws in ws_rows:
-            try:
-                surfaces = (client.call("surface.list", {"workspace_id": ws.get("id")}) or {}).get("surfaces") or []
-            except CmuxError:
-                surfaces = []
+        for ws in win.get("workspaces") or []:
+            summary = summaries.get(str(ws.get("id")), {})
             workspaces.append({
                 "id": ws.get("id"),
                 "ref": ws.get("ref"),
                 "title": ws.get("title"),
                 "selected": ws.get("selected"),
                 "pinned": ws.get("pinned"),
-                "current_directory": ws.get("current_directory"),
-                "latest_message": ws.get("latest_conversation_message") or ws.get("latest_submitted_message"),
-                "surfaces": [
+                "current_directory": summary.get("current_directory"),
+                "latest_message": summary.get("latest_conversation_message") or summary.get("latest_submitted_message"),
+                "layout": ws.get("layout"),
+                "panes": [
                     {
-                        "id": s.get("id"),
-                        "ref": s.get("ref"),
-                        "type": s.get("type"),
-                        "title": s.get("title"),
-                        "focused": s.get("focused"),
-                        "pane_id": s.get("pane_id"),
+                        "id": pane.get("id"),
+                        "ref": pane.get("ref"),
+                        "focused": pane.get("focused"),
+                        "selected_surface_id": pane.get("selected_surface_id"),
+                        "surfaces": [
+                            {
+                                "id": surf.get("id"),
+                                "ref": surf.get("ref"),
+                                "type": surf.get("type"),
+                                "title": surf.get("title"),
+                                "url": surf.get("url"),
+                            }
+                            for surf in pane.get("surfaces") or []
+                        ],
                     }
-                    for s in surfaces
+                    for pane in ws.get("panes") or []
                 ],
             })
-        out.append({"id": win_id, "ref": win.get("ref"), "workspaces": workspaces})
+        out.append({"id": win.get("id"), "ref": win.get("ref"), "workspaces": workspaces})
     return {"windows": out}
 
 
@@ -388,9 +511,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         sys.stderr.write("%s %s\n" % (self.address_string(), line))
 
     def _send_json(self, status: int, payload: Any, extra_headers: Optional[Dict[str, str]] = None) -> None:
-        body = json.dumps(payload).encode("utf-8")
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        compressed = len(body) > 1024 and "gzip" in (self.headers.get("Accept-Encoding") or "")
+        if compressed:
+            body = gzip.compress(body, compresslevel=5)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         for key, value in (extra_headers or {}).items():
@@ -451,8 +580,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             if url.path == "/api/tree":
                 return self._send_json(200, build_tree(self.client))
-            if url.path == "/api/screen":
-                return self._screen(query)
             if url.path == "/api/notifications":
                 result = self.client.call("notification.list") or {}
                 return self._send_json(200, {"notifications": result.get("notifications") or []})
@@ -487,6 +614,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 raise CmuxError("bad_request", f"missing {key}")
             return value
 
+        if path == "/api/screens":
+            revisions = body.get("surfaces")
+            if not isinstance(revisions, dict) or not revisions:
+                raise CmuxError("bad_request", "surfaces must be an object of surface_id -> revision")
+            if len(revisions) > MAX_SCREENS:
+                raise CmuxError("bad_request", f"at most {MAX_SCREENS} surfaces per request")
+            if not all(isinstance(k, str) and k and isinstance(v, str) for k, v in revisions.items()):
+                raise CmuxError("bad_request", "surface ids and revisions must be strings")
+            try:
+                lines = max(1, min(int(body.get("lines") or 400), MAX_SCREEN_LINES))
+            except (TypeError, ValueError):
+                lines = 400
+            return {"screens": self.client.read_screens(revisions, lines)}
         if path == "/api/send":
             surface_id = need("surface_id")
             text = body.get("text") or ""
@@ -560,17 +700,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'")
         self.end_headers()
         self.wfile.write(data)
-
-    def _screen(self, query: Dict[str, List[str]]) -> None:
-        surface_id = (query.get("surface_id") or [""])[0]
-        if not surface_id:
-            return self._send_json(400, {"error": "bad_request", "message": "missing surface_id"})
-        try:
-            lines = max(1, min(int((query.get("lines") or ["200"])[0]), MAX_SCREEN_LINES))
-        except ValueError:
-            lines = 200
-        after = (query.get("after_revision") or [""])[0]
-        self._send_json(200, self.client.read_screen(surface_id, lines, after))
 
     def _events(self) -> None:
         q = self.hub.subscribe()
