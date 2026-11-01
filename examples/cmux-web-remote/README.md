@@ -26,6 +26,13 @@ trusts processes started from cmux terminals, so no socket password is needed:
 python3 examples/cmux-web-remote/server.py
 ```
 
+Keep it in the foreground of that terminal (or a child of it, such as an
+agent's background task). `cmuxOnly` checks the process ancestry, so `nohup
+... &`, `launchd` or a detached `screen` reparent the server away from cmux and
+the socket answers `Access denied`; the server then exits with that message. To
+run it detached, switch cmux's socket to `password` mode and export
+`CMUX_SOCKET_PASSWORD`.
+
 It prints a one-time login URL such as
 `http://127.0.0.1:8787/login?token=...`. Opening it sets an HttpOnly cookie for
 30 days. Set `CMUX_WEB_TOKEN` to keep the same token across restarts.
@@ -68,7 +75,7 @@ browser ──HTTP/SSE──▶ server.py ──unix socket──▶ cmux.app
 | HTTP | cmux v2 method |
 | --- | --- |
 | `GET /api/tree` | `window.list`, `workspace.list`, `surface.list` |
-| `GET /api/screen?surface_id=&after_revision=` | `surface.wait_text_change` (scrollback, last 400 lines) |
+| `GET /api/screen?surface_id=&after_revision=` | `surface.wait_text_change` (scrollback, last 400 lines); on cmux builds without it (0.65.x), `surface.read_text` polled every 0.5 s |
 | `POST /api/send {surface_id, text, enter}` | `surface.send_text`, then `surface.send_key enter` |
 | `POST /api/key {surface_id, key}` | `surface.send_key` |
 | `POST /api/workspace/select {workspace_id}` | `workspace.select` (switches the Mac's screen too) |

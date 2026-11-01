@@ -16,6 +16,8 @@ See README.md for remote access, authentication and security notes.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import hmac
 import http.server
 import json
@@ -37,6 +39,8 @@ EVENT_CATEGORIES = ["notification", "workspace", "surface"]
 # Surface events that change the tree; input/key echoes are skipped.
 SKIPPED_EVENTS = {"surface.input_sent", "surface.key_sent", "surface.action"}
 WAIT_TIMEOUT_MS = 25000
+# Poll interval when cmux lacks surface.wait_text_change (0.65.x and older).
+FALLBACK_POLL_SECONDS = 0.5
 MAX_BODY_BYTES = 256 * 1024
 MAX_SCREEN_LINES = 2000
 
@@ -51,6 +55,34 @@ class CmuxError(Exception):
         super().__init__(f"{code}: {message}")
         self.code = code
         self.message = message
+
+
+def decode_frame(line: str) -> Dict[str, Any]:
+    """Parse one socket reply. cmux refuses with a plain-text ERROR line."""
+    if line.startswith("ERROR"):
+        text = line.strip()
+        if "Access denied" in text:
+            raise CmuxError(
+                "access_denied",
+                text + ". Start this server in the foreground of a cmux terminal (not nohup/launchd), "
+                "or set the socket to password mode and export CMUX_SOCKET_PASSWORD.",
+            )
+        raise CmuxError("socket_error", text)
+    try:
+        frame = json.loads(line)
+    except ValueError:
+        raise CmuxError("bad_response", f"unexpected reply: {line[:200]!r}")
+    if not isinstance(frame, dict):
+        raise CmuxError("bad_response", "non-object response")
+    return frame
+
+
+def screen_text(result: Dict[str, Any]) -> str:
+    """surface.read_text answers with text, base64, or both."""
+    if isinstance(result.get("text"), str):
+        return result["text"]
+    raw = result.get("base64")
+    return base64.b64decode(raw).decode("utf-8", errors="replace") if raw else ""
 
 
 def default_socket_path() -> str:
@@ -114,6 +146,8 @@ class CmuxClient:
         self.password = password
         self._next_id = 0
         self._id_lock = threading.Lock()
+        # None until the first screen read finds out whether cmux has it.
+        self.has_wait_text_change: Optional[bool] = None
 
     def _new_id(self) -> str:
         with self._id_lock:
@@ -127,17 +161,49 @@ class CmuxClient:
             req_id = self._new_id()
             conn.write_line(json.dumps({"id": req_id, "method": method, "params": params or {}}))
             try:
-                resp = json.loads(conn.read_line())
+                resp = decode_frame(conn.read_line())
             except socket.timeout:
                 raise CmuxError("timeout", f"{method} timed out")
         finally:
             conn.close()
-        if not isinstance(resp, dict):
-            raise CmuxError("bad_response", "non-object response")
         if resp.get("ok") is True:
             return resp.get("result")
         err = resp.get("error") or {}
         raise CmuxError(str(err.get("code") or "error"), str(err.get("message") or "unknown error"))
+
+    def read_screen(self, surface_id: str, lines: int, after_revision: str) -> Dict[str, Any]:
+        """Terminal text plus a revision; with after_revision, wait for a change.
+
+        Uses surface.wait_text_change when cmux has it, else polls
+        surface.read_text and derives the revision from the text.
+        """
+        params: Dict[str, Any] = {"surface_id": surface_id, "scrollback": True, "lines": lines}
+        if self.has_wait_text_change is not False:
+            native = dict(params)
+            if after_revision:
+                native["after_revision"] = after_revision
+                native["timeout_ms"] = WAIT_TIMEOUT_MS
+            try:
+                result = self.call("surface.wait_text_change", native, timeout=WAIT_TIMEOUT_MS / 1000 + 10) or {}
+                self.has_wait_text_change = True
+                return {
+                    "text": screen_text(result),
+                    "revision": result.get("revision"),
+                    "changed": result.get("changed", True),
+                }
+            except CmuxError as exc:
+                if exc.code != "method_not_found":
+                    raise
+                self.has_wait_text_change = False
+        deadline = time.monotonic() + WAIT_TIMEOUT_MS / 1000
+        while True:
+            text = screen_text(self.call("surface.read_text", params) or {})
+            revision = hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+            if revision != after_revision:
+                return {"text": text, "revision": revision, "changed": True}
+            if time.monotonic() >= deadline:
+                return {"text": text, "revision": revision, "changed": False}
+            time.sleep(FALLBACK_POLL_SECONDS)
 
     def open_event_stream(self, after_seq: Optional[int]) -> LineSocket:
         conn = LineSocket(self.socket_path, self.password, timeout=60.0)
@@ -211,7 +277,7 @@ class EventHub:
                     raise CmuxError("timeout", "no heartbeat from cmux")
                 if not line.strip():
                     continue
-                frame = json.loads(line)
+                frame = decode_frame(line)
                 if frame.get("ok") is False:
                     err = frame.get("error") or {}
                     raise CmuxError(str(err.get("code")), str(err.get("message")))
@@ -503,18 +569,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             lines = max(1, min(int((query.get("lines") or ["200"])[0]), MAX_SCREEN_LINES))
         except ValueError:
             lines = 200
-        params: Dict[str, Any] = {"surface_id": surface_id, "scrollback": True, "lines": lines}
         after = (query.get("after_revision") or [""])[0]
-        if after:
-            # Long-poll: cmux answers when the terminal text changes or at timeout.
-            params["after_revision"] = after
-            params["timeout_ms"] = WAIT_TIMEOUT_MS
-        result = self.client.call("surface.wait_text_change", params, timeout=WAIT_TIMEOUT_MS / 1000 + 10) or {}
-        self._send_json(200, {
-            "text": result.get("text") or "",
-            "revision": result.get("revision"),
-            "changed": result.get("changed", True),
-        })
+        self._send_json(200, self.client.read_screen(surface_id, lines, after))
 
     def _events(self) -> None:
         q = self.hub.subscribe()
@@ -574,6 +630,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         client.call("system.ping")
     except CmuxError as exc:
+        if exc.code in ("access_denied", "auth_failed"):
+            print(f"error: {exc.message}", file=sys.stderr)
+            return 1
         print(f"warning: cmux socket check failed ({exc}); will keep retrying", file=sys.stderr)
 
     hub = EventHub(client)

@@ -16,7 +16,8 @@
   button { background:#2a2a2a; color:var(--fg); border:1px solid #3a3a3a; border-radius:6px; padding:.35em .7em; font:inherit; cursor:pointer; }
   button:hover { border-color:var(--acc); }
   main { flex:1; display:flex; min-height:0; }
-  #side { width:280px; border-right:1px solid var(--line); overflow:auto; background:var(--panel); }
+  #side { width:280px; border-right:1px solid var(--line); overflow-y:auto; overflow-x:hidden; background:var(--panel); }
+  #filter { position:sticky; top:0; z-index:1; width:100%; padding:.5em .7em; background:#141414; color:var(--fg); border:0; border-bottom:1px solid var(--line); font:inherit; }
   #view { flex:1; display:flex; flex-direction:column; min-width:0; }
   .ws { border-bottom:1px solid var(--line); padding:.5em .7em; }
   .ws-title { display:flex; align-items:center; gap:.4em; font-weight:600; }
@@ -39,6 +40,8 @@
   .n.unread { border-left:3px solid var(--warn); }
   .n .nt { font-weight:600; }
   .n .nb { color:#bbb; font-size:.9em; white-space:pre-wrap; word-break:break-word; }
+  .n .nb.clamp { display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; cursor:zoom-in; }
+  .n.open .nb.clamp { display:block; cursor:zoom-out; }
   .n .nm { color:var(--mute); font-size:.75em; }
   .empty { color:var(--mute); padding:1em; }
   #toggleSide, #toggleNotifs { display:none; }
@@ -59,7 +62,7 @@
   <button id="toggleNotifs">✉ <span id="unreadCount">0</span></button>
 </header>
 <main>
-  <nav id="side"><div class="empty">Loading…</div></nav>
+  <nav id="side"><input id="filter" type="search" placeholder="Filter workspaces"><div id="wslist"><div class="empty">Loading…</div></div></nav>
   <section id="view">
     <pre id="screen">Pick a terminal on the left.</pre>
     <div id="bar">
@@ -111,20 +114,28 @@ async function loadTree() {
   try {
     state.tree = await api("/api/tree");
     renderTree();
-  } catch (e) { $("side").replaceChildren(el("div", { className: "empty", textContent: "Error: " + e.message })); }
+  } catch (e) { $("wslist").replaceChildren(el("div", { className: "empty", textContent: "Error: " + e.message })); }
 }
 
 function unreadFor(wsId) {
   return state.notifications.filter((n) => !n.is_read && n.workspace_id === wsId).length;
 }
 
+function matchesFilter(ws, needle) {
+  if (!needle) return true;
+  const hay = [ws.title, ws.current_directory, ws.latest_message, ...ws.surfaces.map((s) => s.title)].join("\n").toLowerCase();
+  return hay.includes(needle);
+}
+
 function renderTree() {
-  const side = $("side");
+  const side = $("wslist");
+  const needle = $("filter").value.trim().toLowerCase();
   side.replaceChildren();
   const windows = (state.tree && state.tree.windows) || [];
   windows.forEach((win, wi) => {
     if (windows.length > 1) side.append(el("div", { className: "ws-meta", style: "padding:.4em .7em", textContent: "Window " + (wi + 1) }));
     for (const ws of win.workspaces) {
+      if (!matchesFilter(ws, needle)) continue;
       const unread = unreadFor(ws.id);
       const title = el("div", { className: "ws-title" },
         el("span", { textContent: ws.title || ws.ref || "workspace" }),
@@ -225,7 +236,8 @@ function renderNotifications() {
     const item = el("div", { className: "n" + (n.is_read ? "" : " unread") },
       el("div", { className: "nt", textContent: n.title || "(no title)" }),
       n.subtitle ? el("div", { className: "nb", textContent: n.subtitle }) : null,
-      n.body ? el("div", { className: "nb", textContent: n.body }) : null,
+      n.body ? el("div", { className: "nb clamp", textContent: n.body, title: "Click to expand",
+        onclick: (e) => { e.stopPropagation(); item.classList.toggle("open"); } }) : null,
       el("div", { className: "nm", textContent: [n.tab_title, n.created_at && new Date(n.created_at).toLocaleString()].filter(Boolean).join(" · ") }));
     item.onclick = async () => {
       if (n.surface_id) selectSurface(n.surface_id, n.tab_title || n.title || "terminal");
@@ -236,6 +248,7 @@ function renderNotifications() {
   }
 }
 
+$("filter").addEventListener("input", renderTree);
 $("readAll").onclick = async () => { await api("/api/notifications/read", { all: true }); loadNotifications(); };
 
 function showBrowserNotification(n) {
