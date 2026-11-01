@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>cmux web remote</title>
+<style>
+  :root { color-scheme: dark; --bg:#111; --panel:#1b1b1b; --line:#2c2c2c; --fg:#ddd; --mute:#888; --acc:#4c9aff; --warn:#e8a33d; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui,-apple-system,sans-serif; height:100dvh; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:.6em; padding:.5em .8em; border-bottom:1px solid var(--line); }
+  header h1 { font-size:1em; margin:0; flex:1; }
+  #status { font-size:.85em; color:var(--mute); }
+  #status.ok::before { content:"● "; color:#4caf50; }
+  #status.bad::before { content:"● "; color:#e55; }
+  button { background:#2a2a2a; color:var(--fg); border:1px solid #3a3a3a; border-radius:6px; padding:.35em .7em; font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--acc); }
+  main { flex:1; display:flex; min-height:0; }
+  #side { width:280px; border-right:1px solid var(--line); overflow:auto; background:var(--panel); }
+  #view { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .ws { border-bottom:1px solid var(--line); padding:.5em .7em; }
+  .ws-title { display:flex; align-items:center; gap:.4em; font-weight:600; }
+  .ws-title .sel { color:var(--acc); font-size:.8em; }
+  .ws-title .badge { background:var(--warn); color:#000; border-radius:9px; padding:0 .45em; font-size:.75em; }
+  .ws-meta { color:var(--mute); font-size:.8em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .surf { display:block; width:100%; text-align:left; margin-top:.3em; background:none; border:1px solid transparent; padding:.25em .4em; }
+  .surf.active { border-color:var(--acc); background:#1e2a3a; }
+  .surf .t { color:var(--mute); font-size:.8em; }
+  .ws-actions { margin-top:.3em; }
+  .ws-actions button { font-size:.8em; padding:.15em .5em; }
+  #screen { flex:1; margin:0; padding:.6em; overflow:auto; font:12px/1.25 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre; background:#0b0b0b; }
+  #bar { display:flex; flex-wrap:wrap; gap:.4em; padding:.5em; border-top:1px solid var(--line); background:var(--panel); }
+  #input { flex:1 1 240px; min-height:2.4em; max-height:8em; background:#0f0f0f; color:var(--fg); border:1px solid #3a3a3a; border-radius:6px; padding:.4em; font:13px ui-monospace,Menlo,monospace; resize:vertical; }
+  #keys { display:flex; flex-wrap:wrap; gap:.3em; width:100%; }
+  #keys button { font-size:.85em; }
+  #notifs { width:320px; border-left:1px solid var(--line); overflow:auto; background:var(--panel); }
+  #notifs h2 { font-size:.95em; margin:.6em .7em; display:flex; justify-content:space-between; align-items:center; }
+  .n { padding:.5em .7em; border-top:1px solid var(--line); cursor:pointer; }
+  .n.unread { border-left:3px solid var(--warn); }
+  .n .nt { font-weight:600; }
+  .n .nb { color:#bbb; font-size:.9em; white-space:pre-wrap; word-break:break-word; }
+  .n .nm { color:var(--mute); font-size:.75em; }
+  .empty { color:var(--mute); padding:1em; }
+  #toggleSide, #toggleNotifs { display:none; }
+  @media (max-width: 900px) {
+    #toggleSide, #toggleNotifs { display:inline-block; }
+    #side, #notifs { position:fixed; top:2.6em; bottom:0; z-index:5; width:85vw; display:none; }
+    #side { left:0; } #notifs { right:0; }
+    body.show-side #side, body.show-notifs #notifs { display:block; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <button id="toggleSide">☰</button>
+  <h1 id="title">cmux web remote</h1>
+  <span id="status" class="bad">connecting</span>
+  <button id="enableNotify" title="Show browser notifications">🔔</button>
+  <button id="toggleNotifs">✉ <span id="unreadCount">0</span></button>
+</header>
+<main>
+  <nav id="side"><div class="empty">Loading…</div></nav>
+  <section id="view">
+    <pre id="screen">Pick a terminal on the left.</pre>
+    <div id="bar">
+      <textarea id="input" placeholder="Type text, Enter sends it with a newline, Shift+Enter for a new line"></textarea>
+      <button id="sendBtn">Send ⏎</button>
+      <button id="sendRawBtn" title="Send without pressing Enter">Send</button>
+      <div id="keys">
+        <button data-key="enter">Enter</button>
+        <button data-key="escape">Esc</button>
+        <button data-key="ctrl+c">Ctrl‑C</button>
+        <button data-key="tab">Tab</button>
+        <button data-key="up">↑</button>
+        <button data-key="down">↓</button>
+        <button data-key="left">←</button>
+        <button data-key="right">→</button>
+        <button data-key="ctrl+d">Ctrl‑D</button>
+        <label style="margin-left:auto;font-size:.85em;color:var(--mute)"><input type="checkbox" id="follow" checked> follow</label>
+      </div>
+    </div>
+  </section>
+  <aside id="notifs">
+    <h2>Notifications <button id="readAll" style="font-size:.8em">Mark all read</button></h2>
+    <div id="nlist"><div class="empty">None</div></div>
+  </aside>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const state = { tree: null, surfaceId: null, revision: null, pollToken: 0, notifications: [] };
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const res = await fetch(path, opts);
+  if (res.status === 401) { location.href = "/"; throw new Error("unauthorized"); }
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || data.error || res.statusText);
+  return data;
+}
+
+function el(tag, props, ...children) {
+  const node = document.createElement(tag);
+  Object.assign(node, props || {});
+  for (const c of children) if (c != null) node.append(c);
+  return node;
+}
+
+// ---- workspaces -----------------------------------------------------------
+async function loadTree() {
+  try {
+    state.tree = await api("/api/tree");
+    renderTree();
+  } catch (e) { $("side").replaceChildren(el("div", { className: "empty", textContent: "Error: " + e.message })); }
+}
+
+function unreadFor(wsId) {
+  return state.notifications.filter((n) => !n.is_read && n.workspace_id === wsId).length;
+}
+
+function renderTree() {
+  const side = $("side");
+  side.replaceChildren();
+  const windows = (state.tree && state.tree.windows) || [];
+  windows.forEach((win, wi) => {
+    if (windows.length > 1) side.append(el("div", { className: "ws-meta", style: "padding:.4em .7em", textContent: "Window " + (wi + 1) }));
+    for (const ws of win.workspaces) {
+      const unread = unreadFor(ws.id);
+      const title = el("div", { className: "ws-title" },
+        el("span", { textContent: ws.title || ws.ref || "workspace" }),
+        ws.selected ? el("span", { className: "sel", textContent: "● on screen" }) : null,
+        unread ? el("span", { className: "badge", textContent: String(unread) }) : null);
+      const box = el("div", { className: "ws" }, title);
+      if (ws.current_directory) box.append(el("div", { className: "ws-meta", textContent: ws.current_directory }));
+      if (ws.latest_message) box.append(el("div", { className: "ws-meta", textContent: "› " + ws.latest_message }));
+      for (const s of ws.surfaces) {
+        if (s.type && s.type !== "terminal") continue;
+        const b = el("button", { className: "surf" + (s.id === state.surfaceId ? " active" : "") },
+          el("span", { textContent: s.title || s.ref }), " ", el("span", { className: "t", textContent: s.ref || "" }));
+        b.onclick = () => { selectSurface(s.id, ws.title + " / " + (s.title || s.ref)); document.body.classList.remove("show-side"); };
+        box.append(b);
+      }
+      const show = el("button", { textContent: "Show on Mac", title: "Switch the Mac's window to this workspace" });
+      show.onclick = async () => { await api("/api/workspace/select", { workspace_id: ws.id }); loadTree(); };
+      box.append(el("div", { className: "ws-actions" }, show));
+      side.append(box);
+    }
+  });
+  const add = el("button", { textContent: "+ New workspace", style: "margin:.7em" });
+  add.onclick = async () => {
+    const cwd = prompt("Working directory (optional)", "");
+    if (cwd === null) return;
+    await api("/api/workspace/create", cwd ? { cwd } : {});
+    loadTree();
+  };
+  side.append(add);
+}
+
+// ---- terminal view --------------------------------------------------------
+function selectSurface(id, label) {
+  state.surfaceId = id;
+  state.revision = null;
+  $("title").textContent = label;
+  $("screen").textContent = "Loading…";
+  renderTree();
+  pollScreen(++state.pollToken);
+}
+
+async function pollScreen(token) {
+  while (token === state.pollToken && state.surfaceId) {
+    try {
+      const q = new URLSearchParams({ surface_id: state.surfaceId, lines: "400" });
+      if (state.revision) q.set("after_revision", state.revision);
+      const r = await api("/api/screen?" + q);
+      if (token !== state.pollToken) return;
+      if (r.changed !== false || state.revision === null) {
+        const screen = $("screen");
+        screen.textContent = r.text;
+        if ($("follow").checked) screen.scrollTop = screen.scrollHeight;
+      }
+      state.revision = r.revision;
+    } catch (e) {
+      if (token !== state.pollToken) return;
+      $("screen").textContent += "\n[" + e.message + ", retrying]";
+      await new Promise((ok) => setTimeout(ok, 3000));
+    }
+  }
+}
+
+async function send(enter) {
+  if (!state.surfaceId) return;
+  const text = $("input").value;
+  if (!text && !enter) return;
+  await api("/api/send", { surface_id: state.surfaceId, text, enter });
+  $("input").value = "";
+}
+
+$("sendBtn").onclick = () => send(true);
+$("sendRawBtn").onclick = () => send(false);
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(true); }
+});
+for (const b of document.querySelectorAll("#keys button[data-key]")) {
+  b.onclick = () => state.surfaceId && api("/api/key", { surface_id: state.surfaceId, key: b.dataset.key });
+}
+
+// ---- notifications --------------------------------------------------------
+async function loadNotifications() {
+  try {
+    const r = await api("/api/notifications");
+    state.notifications = r.notifications.slice().sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+    renderNotifications();
+    if (state.tree) renderTree();
+  } catch (e) { /* status line shows connectivity */ }
+}
+
+function renderNotifications() {
+  const list = $("nlist");
+  list.replaceChildren();
+  const unread = state.notifications.filter((n) => !n.is_read).length;
+  $("unreadCount").textContent = unread;
+  document.title = (unread ? "(" + unread + ") " : "") + "cmux web remote";
+  if (!state.notifications.length) { list.append(el("div", { className: "empty", textContent: "None" })); return; }
+  for (const n of state.notifications) {
+    const item = el("div", { className: "n" + (n.is_read ? "" : " unread") },
+      el("div", { className: "nt", textContent: n.title || "(no title)" }),
+      n.subtitle ? el("div", { className: "nb", textContent: n.subtitle }) : null,
+      n.body ? el("div", { className: "nb", textContent: n.body }) : null,
+      el("div", { className: "nm", textContent: [n.tab_title, n.created_at && new Date(n.created_at).toLocaleString()].filter(Boolean).join(" · ") }));
+    item.onclick = async () => {
+      if (n.surface_id) selectSurface(n.surface_id, n.tab_title || n.title || "terminal");
+      document.body.classList.remove("show-notifs");
+      if (!n.is_read) { try { await api("/api/notifications/read", { id: n.id }); } catch (e) {} loadNotifications(); }
+    };
+    list.append(item);
+  }
+}
+
+$("readAll").onclick = async () => { await api("/api/notifications/read", { all: true }); loadNotifications(); };
+
+function showBrowserNotification(n) {
+  if (!n || !("Notification" in window) || Notification.permission !== "granted") return;
+  if (document.visibilityState === "visible" && document.hasFocus()) return;
+  const notice = new Notification(n.title || "cmux", { body: [n.subtitle, n.body].filter(Boolean).join("\n"), tag: n.id });
+  notice.onclick = () => { window.focus(); if (n.surface_id) selectSurface(n.surface_id, n.tab_title || n.title); };
+}
+
+$("enableNotify").onclick = async () => {
+  if (!("Notification" in window)) { alert("This browser has no Notification API (on iOS, add the page to the Home Screen first)."); return; }
+  const p = await Notification.requestPermission();
+  if (p !== "granted") alert("Browser notifications need HTTPS (or localhost) and permission.");
+};
+
+// ---- live events ----------------------------------------------------------
+let treeTimer = null;
+function scheduleTree() { clearTimeout(treeTimer); treeTimer = setTimeout(loadTree, 400); }
+
+function connectEvents() {
+  const es = new EventSource("/api/events");
+  es.onmessage = (msg) => {
+    const m = JSON.parse(msg.data);
+    if (m.type === "status") {
+      $("status").className = m.connected ? "ok" : "bad";
+      $("status").textContent = m.connected ? "live" : "cmux offline";
+      if (m.connected) { loadTree(); loadNotifications(); }
+      return;
+    }
+    if (m.category === "notification") {
+      if (m.name === "notification.created") showBrowserNotification(m.notification);
+      loadNotifications();
+    } else if (m.category === "workspace" || m.category === "surface") {
+      scheduleTree();
+    }
+  };
+  es.onerror = () => { $("status").className = "bad"; $("status").textContent = "reconnecting"; };
+}
+
+$("toggleSide").onclick = () => document.body.classList.toggle("show-side");
+$("toggleNotifs").onclick = () => document.body.classList.toggle("show-notifs");
+
+loadTree();
+loadNotifications();
+connectEvents();
+</script>
+</body>
+</html>
