@@ -718,6 +718,19 @@ class TlsTest(unittest.TestCase):
         finally:
             stuck.close()
 
+    def test_key_next_to_the_cert_is_found(self) -> None:
+        crt = os.path.join(self.tmp, "mac.crt")
+        shutil.copy(self.cert, crt)
+        self.assertIsNone(server.default_tls_key(crt))
+        shutil.copy(self.key, os.path.join(self.tmp, "mac.key"))
+        key = server.default_tls_key(crt)
+        self.assertEqual(key, os.path.join(self.tmp, "mac.key"))
+        server.load_tls_context(crt, key)
+
+    def test_missing_key_says_so(self) -> None:
+        with self.assertRaisesRegex(ssl.SSLError, "--tls-key"):
+            server.load_tls_context(self.cert, None)
+
     def test_cert_hostname_and_phone_url(self) -> None:
         name = server.cert_hostname(self.cert)
         self.assertEqual(name, "mac.tail1.ts.net")

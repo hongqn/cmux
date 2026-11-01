@@ -59,7 +59,7 @@ Options:
 | `--access-log` | Log every request. Off by default: only errors are logged, because a log line per poll would keep changing the server's own terminal, and a browser watching that workspace would poll again at once, forever. |
 | `--allow-origin <url>` | Extra origin allowed to POST, e.g. your Tailscale HTTPS name if a proxy rewrites `Host`. |
 | `--public-url <url>` | The URL other devices use, printed as a QR code at startup and allowed as an origin. Defaults to the `tailscale serve` HTTPS name that proxies to `--port`, or `http://<--host>:<port>` for a specific non-loopback `--host`. |
-| `--tls-cert <pem>`, `--tls-key <pem>` | Serve HTTPS directly. The key may live in the cert file. With a certificate for a DNS name, the phone URL and QR code use that name. |
+| `--tls-cert <pem>`, `--tls-key <pem>` | Serve HTTPS directly. The key may live in the cert file; without `--tls-key`, `<name>.key` next to `<name>.crt` is used, as `tailscale cert` writes them. With a certificate for a DNS name, the phone URL and QR code use that name. |
 | `--no-qr` | Print the phone URL without the QR code. |
 
 ## Use it from your phone
@@ -85,8 +85,7 @@ fetch a certificate for the Mac's tailnet name and serve it yourself:
 
 ```bash
 tailscale cert m1max.example.ts.net   # writes m1max.example.ts.net.crt and .key
-python3 server.py --host 100.x.y.z \
-  --tls-cert m1max.example.ts.net.crt --tls-key m1max.example.ts.net.key
+python3 server.py --host 100.x.y.z --tls-cert m1max.example.ts.net.crt   # finds the .key next to it
 ```
 
 The QR code then points at `https://m1max.example.ts.net:8787`. Tailscale

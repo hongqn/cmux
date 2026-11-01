@@ -953,10 +953,30 @@ class Server(http.server.ThreadingHTTPServer):
             tls.close()
 
 
+def default_tls_key(cert: str) -> Optional[str]:
+    """The key `tailscale cert` writes next to the cert (name.crt -> name.key), unless the cert holds one."""
+    try:
+        with open(cert, encoding="utf-8", errors="replace") as fh:
+            if "PRIVATE KEY-----" in fh.read():
+                return None
+    except OSError:
+        return None
+    stem, _ = os.path.splitext(cert)
+    for candidate in (stem + ".key", cert + ".key"):
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def load_tls_context(cert: str, key: Optional[str]) -> ssl.SSLContext:
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    ctx.load_cert_chain(cert, key)
+    try:
+        ctx.load_cert_chain(cert, key)
+    except ssl.SSLError as exc:
+        if key is None:
+            raise ssl.SSLError(f"{cert} holds no private key; pass it with --tls-key") from exc
+        raise ssl.SSLError(f"{cert} and {key} are not a matching PEM certificate and key ({exc})") from exc
     return ctx
 
 
@@ -1053,7 +1073,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--tls-cert", default=None,
                         help="serve HTTPS with this certificate (PEM; may also hold the key), "
                              "e.g. from `tailscale cert <mac>.<tailnet>.ts.net`")
-    parser.add_argument("--tls-key", default=None, help="private key for --tls-cert (PEM)")
+    parser.add_argument("--tls-key", default=None,
+                        help="private key for --tls-cert (PEM; default: the cert's name with .key, if it exists)")
     parser.add_argument("--no-qr", action="store_true", help="do not print a QR code of the login URL")
     parser.add_argument("--access-log", action="store_true",
                         help="log every request, not only errors (avoid when the server's own terminal is watched)")
@@ -1064,7 +1085,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ssl_context = None
     if args.tls_cert:
         try:
-            ssl_context = load_tls_context(args.tls_cert, args.tls_key)
+            ssl_context = load_tls_context(args.tls_cert, args.tls_key or default_tls_key(args.tls_cert))
         except (OSError, ssl.SSLError) as exc:
             print(f"error: cannot load TLS certificate: {exc}", file=sys.stderr)
             return 1
