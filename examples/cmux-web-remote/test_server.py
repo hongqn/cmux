@@ -33,6 +33,35 @@ PANE1_ID = "77777777-7777-7777-7777-777777777777"
 PANE2_ID = "88888888-8888-8888-8888-888888888888"
 
 # A render grid in cmux.render-grid.v1 shape (trimmed to the fields used).
+NOTIF2_ID = "99999999-9999-9999-9999-999999999999"
+HOME = os.path.expanduser("~")
+
+# The v1 `sidebar_state` text cmux 0.65 prints (format from
+# ControlCommandCoordinator+SidebarReportsV1.swift).
+SIDEBAR_STATE = [
+    f"tab={WS_ID}",
+    "color=#C0392B",
+    f"cwd={HOME}/src/api",
+    "focused_cwd=unknown",
+    "focused_panel=unknown",
+    "git_branch=main dirty",
+    "pr=none",
+    "pr_label=none",
+    "ports=8787",
+    "progress=0.40 Indexing",
+    "status_count=3",
+    "  claude_code=Running icon=bolt.fill color=#4C8DFF work=running",
+    "  program_status=claude-code · Working icon=bolt.fill priority=2",
+    "  docs=[spec](https://example.com/spec) format=markdown url=https://example.com/spec",
+    "meta_block_count=0",
+    "log_count=7",
+    "  [info] first",
+    "  [info] second",
+    "  [warning] disk almost full",
+    "  [info] third",
+    "  [success] 合并。 latest wins",
+]
+
 RENDER_GRID = {
     "format": "cmux.render-grid.v1",
     "columns": 20, "rows": 2, "scrollback_rows": 1,
@@ -66,6 +95,14 @@ class FakeCmux:
         self.stream_conns: List[socket.socket] = []
         self.text = "$ echo hi\nhi\n"
         self.text2 = "server listening\n"
+        # v1 `sidebar_state --tab=<id>` replies, by workspace id.
+        self.sidebar_states: Dict[str, List[str]] = {WS_ID: list(SIDEBAR_STATE)}
+        self.notifications: List[Dict[str, Any]] = [
+            {"id": NOTIF_ID, "workspace_id": WS_ID, "surface_id": SURF_ID,
+             "title": "Claude is waiting", "body": "Approve Bash?", "is_read": False},
+            {"id": NOTIF2_ID, "workspace_id": WS_ID, "surface_id": SURF2_ID,
+             "title": "Build done", "body": "", "is_read": True},
+        ]
         # Mimic cmuxOnly refusing a process outside cmux's process tree.
         self.deny = False
         # Mimic cmux builds (0.65.x) without surface.wait_text_change.
@@ -98,6 +135,13 @@ class FakeCmux:
                     f.write(b"ERROR: Access denied - only processes started inside cmux can connect\n")
                     f.flush()
                     return
+                if line.startswith("sidebar_state"):
+                    self.calls.append({"method": "v1:" + line, "params": {}})
+                    tab = line.partition("--tab=")[2].split()[0] if "--tab=" in line else ""
+                    lines = self.sidebar_states.get(tab, ["ERROR: Tab not found"])
+                    f.write(("\n".join(lines) + "\n").encode())
+                    f.flush()
+                    continue
                 req = json.loads(line)
                 self.calls.append(req)
                 if req["method"] == "events.stream":
@@ -129,6 +173,21 @@ class FakeCmux:
             return {"pong": True}
         if method == "window.list":
             return {"windows": [{"id": WIN_ID, "ref": "window:1"}]}
+        if method == "extension.sidebar.snapshot":
+            return {"window_id": WIN_ID, "workspaces": [{
+                "id": WS_ID, "title": "api", "unread_count": 1,
+                "latest_notification_text": "Claude is waiting: Approve Bash?",
+                "description": "Ship the **API**", "custom_color": "#C0392B", "pinned": True,
+                "current_directory": HOME + "/src/api", "branch_summary": "main",
+                "git_branches": [{"branch": "main", "dirty": True}],
+                "pull_request_urls": ["https://github.com/o/r/pull/7"], "listening_ports": [8787],
+                "latest_conversation_message": "ship it",
+            }]}
+        if method == "notification.dismiss":
+            self.notifications = [n for n in self.notifications if n["id"] != params.get("id")]
+            return {"dismissed": 1}
+        if method == "notification.mark_read":
+            return {"marked_read": 1}
         if method == "workspace.list":
             return {"workspaces": [{"id": WS_ID, "ref": "workspace:1", "title": "api", "selected": True,
                                     "current_directory": "/src/api"}]}
@@ -162,8 +221,7 @@ class FakeCmux:
             text = self.text if params.get("surface_id") == SURF_ID else self.text2
             return {"text": text, "revision": "rev-1", "changed": changed}
         if method == "notification.list":
-            return {"notifications": [{"id": NOTIF_ID, "workspace_id": WS_ID, "surface_id": SURF_ID,
-                                       "title": "Claude is waiting", "body": "Approve Bash?", "is_read": False}]}
+            return {"notifications": [dict(n) for n in self.notifications]}
         return {}
 
     def push_event(self, frame: Dict[str, Any]) -> None:
@@ -206,6 +264,23 @@ class ServerHarness(unittest.TestCase):
                 return
             time.sleep(0.02)
         self.fail("condition not met in time")
+
+    def open_events(self):
+        """Subscribe to /api/events; returns a function that reads the next message."""
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request("GET", "/api/events", headers={"Cookie": f"{server.COOKIE_NAME}={self.token}"})
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 200)
+
+        def next_message() -> Dict[str, Any]:
+            while True:
+                line = resp.fp.readline().decode()
+                if line.startswith("data: "):
+                    return json.loads(line[len("data: "):])
+
+        self.assertEqual(next_message()["type"], "status")
+        self._wait(lambda: len(self.hub.subscribers) == 1)
+        return next_message
 
     def request(self, method: str, path: str, body: Any = None, headers: Dict[str, str] = None,
                 auth: bool = True) -> http.client.HTTPResponse:
@@ -250,7 +325,7 @@ class ServerTest(ServerHarness):
         tree = json.loads(self.request("GET", "/api/tree").read())
         ws = tree["windows"][0]["workspaces"][0]
         self.assertEqual(ws["id"], WS_ID)
-        self.assertEqual(ws["current_directory"], "/src/api")  # merged from workspace.list
+        self.assertEqual(ws["directory"], "~/src/api")  # merged from extension.sidebar.snapshot
         self.assertEqual(ws["layout"]["direction"], "horizontal")
         self.assertEqual(ws["layout"]["split"], 0.4)
         self.assertEqual([p["id"] for p in ws["panes"]], [PANE1_ID, PANE2_ID])
@@ -360,6 +435,92 @@ class ServerTest(ServerHarness):
         self.assertEqual(msg["name"], "notification.created")  # input_sent was skipped
         self.assertEqual(msg["notification"]["title"], "Claude is waiting")
         self.assertEqual(self.hub.last_seq, 6)
+
+
+class SidebarParityTest(ServerHarness):
+    """The web sidebar shows what cmux's own sidebar row shows."""
+
+    def test_parse_sidebar_state(self) -> None:
+        state = server.parse_sidebar_state(SIDEBAR_STATE)
+        # Highest priority first; ties keep cmux's order.
+        self.assertEqual([e["key"] for e in state["statuses"]], ["program_status", "claude_code", "docs"])
+        working = state["statuses"][0]
+        self.assertEqual(working["value"], "claude-code · Working")
+        self.assertEqual((working["icon"], working["priority"]), ("bolt.fill", 2))
+        running = state["statuses"][1]
+        self.assertEqual((running["color"], running["work"]), ("#4C8DFF", "running"))
+        docs = state["statuses"][2]
+        self.assertEqual((docs["format"], docs["url"]), ("markdown", "https://example.com/spec"))
+        self.assertEqual(state["log"], {"level": "success", "message": "合并。 latest wins"})
+        self.assertEqual(state["progress"], {"value": 0.4, "label": "Indexing"})
+        self.assertTrue(state["working"])
+        self.assertTrue(state["git_dirty"])
+
+    def test_parse_empty_sidebar_state(self) -> None:
+        state = server.parse_sidebar_state(["tab=x", "progress=none", "status_count=0", "log_count=0"])
+        self.assertEqual((state["statuses"], state["log"], state["progress"], state["working"]), ([], None, None, False))
+
+    def test_v1_reply_reads_to_the_end_of_the_log(self) -> None:
+        started = time.time()
+        lines = self.hub.sidebar.client_v1_lines(f"sidebar_state --tab={WS_ID}")
+        self.assertEqual(lines, SIDEBAR_STATE)
+        # Ends on the log section, not on an idle timeout.
+        self.assertLess(time.time() - started, server.V1_IDLE_SECONDS)
+
+    def test_tree_rows_match_the_cmux_sidebar(self) -> None:
+        self.hub.sidebar.refresh([WS_ID])
+        ws = json.loads(self.request("GET", "/api/tree").read())["windows"][0]["workspaces"][0]
+        self.assertEqual(ws["unread_count"], 1)
+        self.assertEqual(ws["latest_notification_text"], "Claude is waiting: Approve Bash?")
+        self.assertEqual(ws["description"], "Ship the **API**")
+        self.assertEqual(ws["custom_color"], "#C0392B")
+        self.assertTrue(ws["pinned"])
+        self.assertEqual(ws["directory"], "~/src/api")  # home abbreviated, as cmux shows it
+        self.assertEqual(ws["branch"], "main")
+        self.assertTrue(ws["git_dirty"])
+        self.assertEqual(ws["pull_requests"], ["https://github.com/o/r/pull/7"])
+        self.assertEqual(ws["ports"], [8787])
+        self.assertEqual(ws["sidebar"]["statuses"][0]["value"], "claude-code · Working")
+        self.assertEqual(ws["sidebar"]["log"]["message"], "合并。 latest wins")
+        self.assertIn("extension.sidebar.snapshot", self.fake.methods())
+
+    def test_tree_fetches_missing_sidebar_state_in_background(self) -> None:
+        ws = json.loads(self.request("GET", "/api/tree").read())["windows"][0]["workspaces"][0]
+        self.assertIsNone(ws["sidebar"])  # not fetched yet: the tree does not wait for it
+        self._wait(lambda: self.hub.sidebar.get(WS_ID) is not None)
+
+    def test_sidebar_event_refreshes_row_and_notifies_browser(self) -> None:
+        self.hub.sidebar.refresh([WS_ID])
+        next_message = self.open_events()
+        self.fake.sidebar_states[WS_ID] = [
+            f"tab={WS_ID}", "progress=none", "status_count=1",
+            "  claude_code=Idle icon=pause.circle.fill color=#8E8E93", "log_count=0",
+        ]
+        self.fake.push_event({"type": "event", "seq": 9, "name": "program_status.changed",
+                              "category": "terminal", "workspace_id": WS_ID})
+        msg = next_message()
+        self.assertEqual(msg["type"], "sidebar")
+        self.assertEqual(msg["workspace_id"], WS_ID)
+        self.assertEqual(msg["sidebar"]["statuses"][0]["value"], "Idle")
+        self.assertFalse(msg["sidebar"]["working"])
+        self.assertEqual(self.hub.sidebar.get(WS_ID)["statuses"][0]["value"], "Idle")
+
+    def test_events_subscribe_to_sidebar_and_terminal(self) -> None:
+        stream = [c for c in self.fake.calls if c["method"] == "events.stream"][0]
+        self.assertTrue({"sidebar", "terminal"} <= set(stream["params"]["categories"]))
+
+    def test_clear_all_dismisses_every_notification(self) -> None:
+        resp = self.request("POST", "/api/notifications/clear_all", {})
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(json.loads(resp.read())["dismissed"], 2)
+        dismissed = [c["params"]["id"] for c in self.fake.calls if c["method"] == "notification.dismiss"]
+        self.assertEqual(sorted(dismissed), sorted([NOTIF_ID, NOTIF2_ID]))
+
+    def test_mark_read_for_a_pane(self) -> None:
+        resp = self.request("POST", "/api/notifications/read", {"workspace_id": WS_ID, "surface_id": SURF_ID})
+        self.assertEqual(resp.status, 200)
+        call = [c for c in self.fake.calls if c["method"] == "notification.mark_read"][-1]
+        self.assertEqual(call["params"], {"workspace_id": WS_ID, "surface_id": SURF_ID})
 
 
 class ReadTextFallbackTest(ServerHarness):
