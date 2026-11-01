@@ -863,14 +863,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._send_login_page(error=True)
         tls = getattr(self.server, "ssl_context", None) is not None
         secure = "; Secure" if tls or self.headers.get("X-Forwarded-Proto") == "https" else ""
-        self.send_response(303)
+        # Not an HTTP redirect: a link opened from another app (the iPhone
+        # camera, Messages) is a cross-site navigation, a redirect stays part of
+        # it, and Safari would not send the SameSite=Strict cookie to "/". A
+        # navigation started by this page is same-site, so the cookie goes along.
+        html = (
+            '<!doctype html><meta http-equiv="refresh" content="0;url=/">'
+            "<title>cmux web remote</title>"
+            '<script>location.replace("/")</script>'
+            "<body style='font-family:system-ui;background:#111;color:#ddd;padding:2em'>"
+            "<a href=/ style='color:#0a84ff'>Continue</a>"
+        ).encode("utf-8")
+        self.send_response(200)
         self.send_header(
             "Set-Cookie",
             f"{COOKIE_NAME}={self.token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000{secure}",
         )
-        self.send_header("Location", "/")
-        self.send_header("Content-Length", "0")
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(html)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
+        self.wfile.write(html)
 
     def _send_login_page(self, error: bool = False) -> None:
         msg = "<p style='color:#e66'>Wrong token.</p>" if error else ""
