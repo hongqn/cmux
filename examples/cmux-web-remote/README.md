@@ -58,6 +58,8 @@ Options:
 | `CMUX_WEB_TOKEN` | Fixed access token instead of a random one. |
 | `--access-log` | Log every request. Off by default: only errors are logged, because a log line per poll would keep changing the server's own terminal, and a browser watching that workspace would poll again at once, forever. |
 | `--allow-origin <url>` | Extra origin allowed to POST, e.g. your Tailscale HTTPS name if a proxy rewrites `Host`. |
+| `--public-url <url>` | The URL other devices use, printed as a QR code at startup and allowed as an origin. Defaults to the `tailscale serve` HTTPS name that proxies to `--port`, or `http://<--host>:<port>` for a specific non-loopback `--host`. |
+| `--no-qr` | Print the phone URL without the QR code. |
 
 ## Use it from your phone
 
@@ -70,7 +72,15 @@ authenticated, encrypted tunnel in front of it instead. With
 tailscale serve --bg --https=443 http://127.0.0.1:8787
 ```
 
-Then open `https://<mac-name>.<tailnet>.ts.net/login?token=...` on the phone.
+Then start (or restart) the server. It finds the Serve name and prints the
+phone login URL with a QR code to scan. Set `CMUX_WEB_TOKEN` to keep the same
+token, and so the same QR code and bookmark, across restarts.
+
+You can also bind to the Mac's tailnet address, since Tailscale already
+encrypts the traffic: `--host 100.x.y.z` prints a QR code for
+`http://100.x.y.z:8787`. Browsers treat plain HTTP as insecure, though, so
+that page cannot show notifications.
+
 HTTPS also lets the page show browser notifications. On iOS, browser
 notifications work only after you add the page to the Home Screen (iOS 16.4+),
 and only while the page is running. For pushes while the page is closed, see

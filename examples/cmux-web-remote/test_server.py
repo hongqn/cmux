@@ -23,6 +23,7 @@ import unittest
 from typing import Any, Dict, List
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import qrterm  # noqa: E402
 import server  # noqa: E402
 
 WS_ID = "11111111-1111-1111-1111-111111111111"
@@ -626,6 +627,48 @@ class AccessDeniedTest(unittest.TestCase):
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class PhoneAccessTest(unittest.TestCase):
+    def test_reed_solomon_matches_iso_example(self) -> None:
+        # ISO/IEC 18004 Annex I: "01234567" as version 1-M.
+        data = [16, 32, 12, 86, 97, 128, 236, 17, 236, 17, 236, 17, 236, 17, 236, 17]
+        self.assertEqual(qrterm.rs_remainder(data, 10), [165, 36, 212, 193, 237, 54, 199, 135, 44, 85])
+
+    def test_format_bits_match_the_spec_table(self) -> None:
+        self.assertEqual(qrterm.format_bits("M", 0), 0b101010000010010)
+        self.assertEqual(qrterm.format_bits("L", 4), 0b110011000101111)
+
+    def test_login_url_fits_and_has_finder_patterns(self) -> None:
+        url = "https://m1max.tailf211.ts.net/login?token=" + "x" * 32
+        m = qrterm.encode(url)
+        n = len(m)
+        self.assertEqual((n - 17) % 4, 0)
+        ring = [[m[y][x] for x in range(7)] for y in range(7)]
+        self.assertTrue(all(ring[0]) and all(ring[6]) and not any(ring[1][1:6]) and all(ring[3][2:5]))
+        lines = qrterm.render(m).split("\n")
+        self.assertEqual(len(lines), (n + 8 + 1) // 2)
+
+    def test_too_long_text_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            qrterm.encode("x" * 400)
+
+    def test_tailscale_serve_url_finds_our_proxy(self) -> None:
+        status = {"TCP": {"443": {"HTTPS": True}},
+                  "Web": {"mac.tail1.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8787"}}}}}
+        self.assertEqual(server.tailscale_serve_url(8787, status), "https://mac.tail1.ts.net")
+        self.assertIsNone(server.tailscale_serve_url(9999, status))
+        other = {"Web": {"mac.tail1.ts.net:8443": {"Handlers": {"/": {"Proxy": "localhost:8787"}}}}}
+        self.assertEqual(server.tailscale_serve_url(8787, other), "https://mac.tail1.ts.net:8443")
+        self.assertIsNone(server.tailscale_serve_url(8787, None))
+
+    def test_phone_url(self) -> None:
+        self.assertIsNone(server.phone_url("127.0.0.1", 8787, None, None))
+        self.assertIsNone(server.phone_url("0.0.0.0", 8787, None, None))
+        self.assertEqual(server.phone_url("100.1.2.3", 8787, None, None), "http://100.1.2.3:8787")
+        self.assertEqual(server.phone_url("127.0.0.1", 8787, None, "https://m.ts.net"), "https://m.ts.net")
+        self.assertEqual(server.phone_url("0.0.0.0", 8787, "http://mac.local:8787/", None), "http://mac.local:8787")
+        self.assertEqual(server.origin_of("https://m.ts.net/x?y"), "https://m.ts.net")
 
 
 if __name__ == "__main__":

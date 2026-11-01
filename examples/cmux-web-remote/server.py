@@ -27,12 +27,15 @@ import queue
 import re
 import secrets
 import socket
+import subprocess
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import parse_qs, urlparse
+
+import qrterm
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "static", "index.html")
@@ -936,6 +939,51 @@ def make_server(host: str, port: int, client: CmuxClient, hub: EventHub, token: 
     return Server((host, port), handler)
 
 
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+WILDCARD_HOSTS = ("0.0.0.0", "::", "")
+
+
+def tailscale_serve_url(port: int, status: Any) -> Optional[str]:
+    """The https://<name>.ts.net URL whose Tailscale Serve handler proxies to our port, if any.
+
+    status is the parsed output of `tailscale serve status --json`.
+    """
+    if not isinstance(status, dict):
+        return None
+    for host_port, web in (status.get("Web") or {}).items():
+        for handler in ((web or {}).get("Handlers") or {}).values():
+            target = str((handler or {}).get("Proxy") or "")
+            parsed = urlparse(target if "://" in target else "http://" + target)
+            if parsed.hostname in LOOPBACK_HOSTS and parsed.port == port:
+                name, _, https_port = host_port.rpartition(":")
+                return f"https://{name}" + ("" if https_port == "443" else f":{https_port}")
+    return None
+
+
+def detect_tailscale_serve(port: int) -> Optional[str]:
+    try:
+        out = subprocess.run(["tailscale", "serve", "status", "--json"], capture_output=True, text=True, timeout=3)
+        return tailscale_serve_url(port, json.loads(out.stdout or "null"))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def phone_url(host: str, port: int, public_url: Optional[str], serve_url: Optional[str]) -> Optional[str]:
+    """The base URL another device should open, or None when only this Mac can reach the server."""
+    if public_url:
+        return public_url.rstrip("/")
+    if serve_url:
+        return serve_url
+    if host in LOOPBACK_HOSTS or host in WILDCARD_HOSTS:
+        return None
+    return f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+
+
+def origin_of(url: str) -> str:
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Control cmux workspaces from a browser.")
     parser.add_argument("--host", default="127.0.0.1",
@@ -944,6 +992,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--socket", default=None, help="cmux socket path (default: $CMUX_SOCKET_PATH)")
     parser.add_argument("--allow-origin", action="append", default=[],
                         help="extra Origin allowed for POSTs, e.g. https://mac.tailnet.ts.net")
+    parser.add_argument("--public-url", default=None,
+                        help="URL other devices use to reach this server, e.g. https://mac.tailnet.ts.net; "
+                             "printed as a QR code (default: found from `tailscale serve`, or --host)")
+    parser.add_argument("--no-qr", action="store_true", help="do not print a QR code of the login URL")
     parser.add_argument("--access-log", action="store_true",
                         help="log every request, not only errors (avoid when the server's own terminal is watched)")
     args = parser.parse_args(argv)
@@ -959,14 +1011,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 1
         print(f"warning: cmux socket check failed ({exc}); will keep retrying", file=sys.stderr)
 
+    serve_url = None if args.public_url else detect_tailscale_serve(args.port)
+    remote = phone_url(args.host, args.port, args.public_url, serve_url)
+    origins = list(args.allow_origin)
+    if remote and remote.startswith("https://"):
+        origins.append(origin_of(remote))  # proxies may rewrite Host
+
     hub = EventHub(client)
     hub.start()
-    server = make_server(args.host, args.port, client, hub, token, args.allow_origin, args.access_log)
-    if args.host not in ("127.0.0.1", "localhost", "::1"):
+    server = make_server(args.host, args.port, client, hub, token, origins, args.access_log)
+    if args.host not in LOOPBACK_HOSTS:
         print("warning: listening beyond loopback without TLS; anyone who gets the token can type into your terminals",
               file=sys.stderr)
     print(f"cmux socket: {client.socket_path}")
-    print(f"open: http://{args.host}:{args.port}/login?token={token}")
+    local_host = "127.0.0.1" if args.host in WILDCARD_HOSTS else args.host
+    print(f"open: http://{local_host}:{args.port}/login?token={token}")
+    if remote:
+        login = f"{remote}/login?token={token}"
+        print(f"phone: {login}")
+        if not args.no_qr and sys.stdout.isatty():
+            print(qrterm.render(qrterm.encode(login)))
+    elif args.host in WILDCARD_HOSTS:
+        print("phone: pass --public-url http://<this-mac>:<port> to print a QR code")
+    sys.stdout.flush()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
