@@ -26,6 +26,7 @@ import unittest
 from typing import Any, Dict, List
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import agentchat  # noqa: E402
 import qrterm  # noqa: E402
 import server  # noqa: E402
 
@@ -109,6 +110,9 @@ class FakeCmux:
             {"id": NOTIF2_ID, "workspace_id": WS_ID, "surface_id": SURF2_ID,
              "title": "Build done", "body": "", "is_read": True},
         ]
+        # chat.sessions.dump records; mobile.chat.send answers not_found when chat_send_lost.
+        self.chat_sessions: List[Dict[str, Any]] = []
+        self.chat_send_lost = False
         # Mimic cmuxOnly refusing a process outside cmux's process tree.
         self.deny = False
         # Mimic cmux builds (0.65.x) without surface.wait_text_change.
@@ -228,6 +232,10 @@ class FakeCmux:
             return {"text": text, "revision": "rev-1", "changed": changed}
         if method == "notification.list":
             return {"notifications": [dict(n) for n in self.notifications]}
+        if method == "chat.sessions.dump":
+            return {"sessions": [dict(x) for x in self.chat_sessions]}
+        if method in ("mobile.chat.send", "mobile.chat.interrupt") and self.chat_send_lost:
+            return None  # _serve answers not_found
         return {}
 
     def push_event(self, frame: Dict[str, Any]) -> None:
@@ -657,6 +665,170 @@ class AccessDeniedTest(unittest.TestCase):
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+def jl(obj: Dict[str, Any]) -> bytes:
+    return json.dumps(obj).encode() + b"\n"
+
+
+TRANSCRIPT = b"".join([
+    b'{"type":"api-request-blob","payload":"' + b"x" * 5000 + b'"}\n',
+    jl({"parentUuid": None, "isSidechain": False, "message": {"role": "user", "content": "fix the tests"},
+        "type": "user", "uuid": "u1", "timestamp": "2026-11-02T08:00:00Z"}),
+    jl({"isSidechain": False, "message": {"role": "user", "content": "<command-name>/clear</command-name>\n<command-args></command-args>"},
+        "type": "user", "uuid": "u2"}),
+    jl({"isSidechain": False, "isMeta": True, "message": {"role": "user", "content": "meta"}, "type": "user", "uuid": "u3"}),
+    jl({"isSidechain": False, "message": {"role": "assistant", "content": [
+        {"type": "thinking", "thinking": ""},
+        {"type": "text", "text": "Running **them** now."},
+        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "pytest -q", "description": "Run tests"}},
+    ]}, "type": "assistant", "uuid": "a1"}),
+    jl({"isSidechain": True, "message": {"role": "assistant", "content": [{"type": "text", "text": "subagent"}]},
+        "type": "assistant", "uuid": "s1"}),
+    jl({"isSidechain": False, "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "2 failed", "is_error": True}]},
+        "type": "user", "uuid": "u4"}),
+    jl({"isSidechain": False, "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "t2", "name": "Edit",
+         "input": {"file_path": "/src/a.py", "old_string": "a = 1\nb = 2", "new_string": "a = 1\nb = 3\nc = 4"}},
+        {"type": "tool_use", "id": "t3", "name": "AskUserQuestion", "input": {"questions": [
+            {"question": "Which fix?", "header": "Fix", "options": [
+                {"label": "Patch", "description": "small"}, {"label": "Rewrite", "description": "big"}]}]}},
+    ]}, "type": "assistant", "uuid": "a2"}),
+])
+
+
+class AgentChatParseTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp()
+        self.path = os.path.join(self.tmp, "t.jsonl")
+        with open(self.path, "wb") as fh:
+            fh.write(TRANSCRIPT)
+
+    def test_transcript_becomes_chat_items(self) -> None:
+        page = agentchat.read_tail(self.path)
+        kinds = [(i["kind"], i.get("text") or i.get("tool") or i.get("prompt")) for i in page["items"]]
+        self.assertEqual(kinds, [
+            ("user", "fix the tests"), ("user", "/clear"), ("assistant", "Running **them** now."),
+            ("tool", "Bash"), ("result", "2 failed"), ("tool", "Edit"), ("question", "Which fix?"),
+        ])
+        bash, result, edit, question = page["items"][3], page["items"][4], page["items"][5], page["items"][6]
+        self.assertEqual((bash["id"], bash["summary"], bash["note"]), ("t1", "pytest -q", "Run tests"))
+        self.assertEqual((result["call_id"], result["is_error"]), ("t1", True))
+        self.assertEqual((edit["path"], edit["additions"], edit["deletions"]), ("/src/a.py", 2, 1))
+        self.assertEqual([o["label"] for o in question["options"]], ["Patch", "Rewrite"])
+        self.assertEqual(question["call_id"], "t3")
+        self.assertEqual(page["end"], len(TRANSCRIPT))
+
+    def test_pages_backwards_and_reads_forward(self) -> None:
+        last = agentchat.read_tail(self.path, want=1, chunk=300)
+        self.assertGreater(last["start"], 0)
+        earlier = agentchat.read_tail(self.path, before=last["start"], chunk=300)
+        self.assertEqual(earlier["start"], 0)
+        ids = [i["id"] for i in earlier["items"] + last["items"]]
+        self.assertEqual(ids, [i["id"] for i in agentchat.read_tail(self.path)["items"]])
+        line = jl({"message": {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+                   "type": "assistant", "uuid": "a3"})
+        with open(self.path, "ab") as fh:
+            fh.write(line + b'{"type":"assistant","partial')  # a line still being written
+        update = agentchat.read_since(self.path, len(TRANSCRIPT))
+        self.assertEqual([i["text"] for i in update["items"]], ["done"])
+        self.assertEqual(update["end"], len(TRANSCRIPT) + len(line))
+
+    def test_long_final_line_is_kept(self) -> None:
+        big = jl({"message": {"role": "assistant", "content": [{"type": "text", "text": "y" * 2000}]},
+                  "type": "assistant", "uuid": "big"})
+        with open(self.path, "ab") as fh:
+            fh.write(big)
+        page = agentchat.read_tail(self.path, chunk=300)
+        self.assertEqual(page["items"][-1]["id"], "big:0")
+        self.assertEqual(page["end"], len(TRANSCRIPT) + len(big))
+
+    def test_session_state(self) -> None:
+        self.assertEqual(agentchat.session_state("working(since: 2026-11-02 08:45:00 +0000)"), "working")
+        self.assertEqual(agentchat.session_state("needsInput(since: 2026-11-02 08:45:00 +0000)"), "needs_input")
+        self.assertEqual(agentchat.session_state("idle"), "idle")
+
+
+class AgentChatServerTest(ServerHarness):
+    def setUp(self) -> None:
+        super().setUp()
+        self.transcript = os.path.join(self.tmp, "session.jsonl")
+        with open(self.transcript, "wb") as fh:
+            fh.write(TRANSCRIPT)
+        self.fake.chat_sessions = [
+            {"session_id": "sess-1", "agent": "claude", "surface_id": SURF_ID.upper(), "workspace_id": WS_ID,
+             "transcript_path": self.transcript, "state": "working(since: 2026-11-02 08:45:00 +0000)",
+             "last_activity": 2.0},
+            {"session_id": "old", "agent": "claude", "surface_id": SURF_ID, "workspace_id": WS_ID,
+             "transcript_path": self.transcript, "state": "ended", "last_activity": 9.0},
+            {"session_id": "codex-1", "agent": "codex", "surface_id": SURF2_ID, "workspace_id": WS_ID,
+             "transcript_path": self.transcript, "state": "idle"},
+        ]
+
+    def post(self, path: str, body: Dict[str, Any]) -> Any:
+        resp = self.request("POST", path, body, headers={"Origin": f"http://127.0.0.1:{self.port}"})
+        return resp.status, json.loads(resp.read() or b"null")
+
+    def test_tree_marks_agent_terminals(self) -> None:
+        tree = json.loads(self.request("GET", "/api/tree").read())
+        surfaces = {s["id"]: s for p in tree["windows"][0]["workspaces"][0]["panes"] for s in p["surfaces"]}
+        self.assertEqual(surfaces[SURF_ID]["agent"],
+                         {"session_id": "sess-1", "agent": "claude", "state": "working", "chat": True})
+        self.assertFalse(surfaces[SURF2_ID]["agent"]["chat"])
+        self.assertIsNone(surfaces[BROWSER_ID]["agent"])
+        self.assertNotIn(self.transcript, json.dumps(tree))
+
+    def test_history_and_poll(self) -> None:
+        status, page = self.post("/api/chat/history", {"session_id": "sess-1"})
+        self.assertEqual(status, 200)
+        self.assertEqual(page["state"], "working")
+        self.assertEqual(len(page["items"]), 7)
+        done = threading.Event()
+        got: Dict[str, Any] = {}
+
+        def poll() -> None:
+            got["r"] = self.post("/api/chat/poll", {"session_id": "sess-1", "after": page["end"], "state": "working"})
+            done.set()
+
+        threading.Thread(target=poll, daemon=True).start()
+        time.sleep(0.6)
+        self.assertFalse(done.is_set(), "poll should wait for new transcript lines")
+        with open(self.transcript, "ab") as fh:
+            fh.write(jl({"message": {"role": "assistant", "content": [{"type": "text", "text": "All green."}]},
+                         "type": "assistant", "uuid": "a9"}))
+        self.assertTrue(done.wait(5))
+        status, update = got["r"]
+        self.assertEqual([i["text"] for i in update["items"]], ["All green."])
+
+    def test_poll_returns_when_state_changes(self) -> None:
+        self.fake.chat_sessions[0]["state"] = "needsInput(since: 2026-11-02 08:46:00 +0000)"
+        status, update = self.post("/api/chat/poll", {"session_id": "sess-1", "after": len(TRANSCRIPT), "state": "working"})
+        self.assertEqual((status, update["state"], update["items"]), (200, "needs_input", []))
+
+    def test_unknown_and_unsupported_sessions(self) -> None:
+        self.assertEqual(self.post("/api/chat/history", {"session_id": "nope"})[0], 404)
+        self.assertEqual(self.post("/api/chat/history", {"session_id": "codex-1"})[0], 409)
+
+    def test_send_goes_through_mobile_chat_send(self) -> None:
+        status, _ = self.post("/api/chat/send", {"session_id": "sess-1", "text": "line one\nline two"})
+        self.assertEqual(status, 200)
+        call = [c for c in self.fake.calls if c["method"] == "mobile.chat.send"][-1]
+        self.assertEqual(call["params"], {"session_id": "sess-1", "text": "line one\nline two"})
+
+    def test_send_falls_back_to_paste_when_binding_is_lost(self) -> None:
+        self.fake.chat_send_lost = True
+        status, _ = self.post("/api/chat/send", {"session_id": "sess-1", "text": "hi"})
+        self.assertEqual(status, 200)
+        tail = [(c["method"], c["params"].get("key") or c["params"].get("text")) for c in self.fake.calls[-4:]]
+        self.assertEqual(tail, [("surface.send_key", "ctrl+a"), ("surface.send_key", "ctrl+k"),
+                                ("surface.send_key", "ctrl+u"), ("terminal.paste", "hi")])
+
+    def test_interrupt(self) -> None:
+        status, _ = self.post("/api/chat/interrupt", {"session_id": "sess-1"})
+        self.assertEqual(status, 200)
+        self.assertEqual([c for c in self.fake.calls if c["method"] == "mobile.chat.interrupt"][-1]["params"],
+                         {"session_id": "sess-1", "hard": False})
 
 
 class PhoneAccessTest(unittest.TestCase):

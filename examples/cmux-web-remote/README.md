@@ -98,6 +98,25 @@ notifications work only after you add the page to the Home Screen (iOS 16.4+),
 and only while the page is running. For pushes while the page is closed, see
 [Next steps](#next-steps).
 
+### Claude Code as a chat
+
+A terminal running Claude Code gets a **Chat / Terminal** switch (phones open
+in Chat). The chat view reads the session's transcript, so it wraps to the page
+instead of the terminal's columns:
+
+- your messages as bubbles, Claude's replies as Markdown (code, tables, lists);
+- tool calls folded into "N steps" groups, each step with its command, diff or
+  output and a ✓/✗;
+- AskUserQuestion as tappable options;
+- a status line: Stop while Claude works; when it waits for a permission, the
+  bottom of the terminal screen with 1/2/3/Esc keys.
+
+Messages go through cmux's `mobile.chat.send` (the iOS app's path: clear the
+prompt, bracketed paste, submit), so multi-line text arrives as one prompt.
+cmux's `chat.sessions.dump` names each session's terminal and transcript; the
+transcript path never leaves the server. Only Claude Code transcripts are
+parsed for now; other agents (Codex) keep the terminal view.
+
 ### On a phone
 
 Below 900px wide the page switches to a phone layout:

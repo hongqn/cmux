@@ -34,9 +34,10 @@ import threading
 import time
 import zlib
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
+import agentchat
 import qrterm
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -604,7 +605,77 @@ class EventHub:
 # ---------------------------------------------------------------------------
 
 
-def build_tree(client: CmuxClient, sidebar: Optional[SidebarCache] = None) -> Dict[str, Any]:
+CHAT_POLL_SECONDS = 25
+CHAT_CHECK_SECONDS = 0.4
+CHAT_AGENTS = {"claude"}  # transcripts agentchat can read
+
+
+class AgentSessions:
+    """Coding-agent sessions cmux tracks, from `chat.sessions.dump`.
+
+    Each record ties a session to its terminal (surface_id), state and
+    transcript path. Transcript paths stay on the server; the browser only
+    names sessions by id, and only ids cmux reports are accepted.
+    """
+
+    def __init__(self, client: CmuxClient, max_age: float = 1.0) -> None:
+        self.client = client
+        self.max_age = max_age
+        self.lock = threading.Lock()
+        self.fetched = 0.0
+        self.sessions: Dict[str, Dict[str, Any]] = {}
+
+    def all(self) -> Dict[str, Dict[str, Any]]:
+        with self.lock:
+            if time.monotonic() - self.fetched < self.max_age:
+                return self.sessions
+        try:
+            result = self.client.call("chat.sessions.dump") or {}
+        except CmuxError:
+            result = {}  # older cmux, or the chat service is off
+        sessions = {s["session_id"]: s for s in result.get("sessions") or [] if s.get("session_id")}
+        with self.lock:
+            self.sessions, self.fetched = sessions, time.monotonic()
+        return sessions
+
+    def get(self, session_id: str) -> Dict[str, Any]:
+        record = self.all().get(session_id)
+        if not record:
+            raise CmuxError("not_found", "no such agent session")
+        return record
+
+    def transcript(self, session_id: str) -> Tuple[Dict[str, Any], str]:
+        record = self.get(session_id)
+        path = record.get("transcript_path") or ""
+        if record.get("agent") not in CHAT_AGENTS or not os.path.isfile(path):
+            raise CmuxError("unsupported", "no readable transcript for this session; use the terminal")
+        return record, path
+
+    @staticmethod
+    def public(record: Dict[str, Any]) -> Dict[str, Any]:
+        path = record.get("transcript_path") or ""
+        return {
+            "session_id": record.get("session_id"),
+            "agent": record.get("agent"),
+            "state": agentchat.session_state(record.get("state") or ""),
+            "chat": record.get("agent") in CHAT_AGENTS and bool(path) and os.path.isfile(path),
+        }
+
+    def by_surface(self) -> Dict[str, Dict[str, Any]]:
+        """The current session of each terminal: live ones beat ended ones, then the latest."""
+        best: Dict[str, Dict[str, Any]] = {}
+        for record in self.all().values():
+            surface = (record.get("surface_id") or "").upper()
+            if not surface:
+                continue
+            rank = (agentchat.session_state(record.get("state") or "") != "ended", record.get("last_activity") or 0)
+            if surface not in best or rank > best[surface][0]:
+                best[surface] = (rank, record)  # type: ignore[assignment]
+        return {k: self.public(v[1]) for k, v in best.items()}  # type: ignore[index]
+
+
+def build_tree(client: CmuxClient, sidebar: Optional[SidebarCache] = None,
+               agents: Optional[AgentSessions] = None) -> Dict[str, Any]:
     """Windows, workspaces, split layouts, panes, tabs and sidebar rows.
 
     system.tree carries the layout and panes; extension.sidebar.snapshot
@@ -612,6 +683,7 @@ def build_tree(client: CmuxClient, sidebar: Optional[SidebarCache] = None) -> Di
     description, branch, ports); the SidebarCache adds status pills and logs.
     """
     snapshot = client.call("system.tree") or {}
+    agent_by_surface = agents.by_surface() if agents else {}
     out = []
     all_ids: List[str] = []
     for win in snapshot.get("windows") or []:
@@ -658,6 +730,7 @@ def build_tree(client: CmuxClient, sidebar: Optional[SidebarCache] = None) -> Di
                                 "type": surf.get("type"),
                                 "title": surf.get("title"),
                                 "url": surf.get("url"),
+                                "agent": agent_by_surface.get(str(surf.get("id") or "").upper()),
                             }
                             for surf in pane.get("surfaces") or []
                         ],
@@ -676,6 +749,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # Set by make_server().
     client: CmuxClient
     hub: EventHub
+    agents: AgentSessions
     token: str
     allowed_origins: List[str]
     # Off by default: the server usually runs in a cmux terminal the browser
@@ -769,7 +843,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._send_json(401, {"error": "unauthorized"})
         try:
             if url.path == "/api/tree":
-                return self._send_json(200, build_tree(self.client, self.hub.sidebar))
+                return self._send_json(200, build_tree(self.client, self.hub.sidebar, self.agents))
             if url.path == "/api/notifications":
                 result = self.client.call("notification.list") or {}
                 return self._send_json(200, {"notifications": result.get("notifications") or []})
@@ -789,13 +863,70 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = self._read_json()
             result = self._dispatch_post(url.path, body)
         except CmuxError as exc:
-            status = 400 if exc.code in ("bad_request", "too_large", "invalid_params") else 502
+            status = {"not_found": 404, "unsupported": 409}.get(exc.code, 502)
+            if exc.code in ("bad_request", "too_large", "invalid_params"):
+                status = 400
             return self._send_json(status, {"error": exc.code, "message": exc.message})
         except ValueError as exc:
             return self._send_json(400, {"error": "bad_request", "message": str(exc)})
         if result is None:
             return self._send_json(404, {"error": "not_found"})
         self._send_json(200, result)
+
+    def _chat(self, action: str, body: Dict[str, Any], need: Any) -> Optional[Dict[str, Any]]:
+        session_id = need("session_id")
+
+        def offset(key: str) -> Optional[int]:
+            value = body.get(key)
+            if value is None:
+                return None
+            if not isinstance(value, int) or value < 0:
+                raise CmuxError("bad_request", f"{key} must be a byte offset")
+            return value
+
+        if action == "history":
+            record, path = self.agents.transcript(session_id)
+            page = agentchat.read_tail(path, offset("before"))
+            return dict(page, state=agentchat.session_state(record.get("state") or ""))
+        if action == "poll":
+            # Long-poll: return once the transcript grows or the agent's state changes.
+            after = offset("after") or 0
+            known_state = body.get("state")
+            deadline = time.monotonic() + CHAT_POLL_SECONDS
+            while True:
+                record, path = self.agents.transcript(session_id)
+                state = agentchat.session_state(record.get("state") or "")
+                update = agentchat.read_since(path, after)
+                if update["items"] or update["end"] != after or state != known_state or time.monotonic() >= deadline:
+                    return dict(update, state=state)
+                time.sleep(CHAT_CHECK_SECONDS)
+        if action == "send":
+            text = body.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise CmuxError("bad_request", "text required")
+            try:
+                return self.client.call("mobile.chat.send", {"session_id": session_id, "text": text}) or {"ok": True}
+            except CmuxError as exc:
+                if exc.code not in ("not_found", "method_not_found"):
+                    raise
+            # cmux lost the session's terminal binding; paste into the surface it last reported.
+            record = self.agents.get(session_id)
+            target = {"surface_id": record.get("surface_id"), "workspace_id": record.get("workspace_id")}
+            for key in ("ctrl+a", "ctrl+k", "ctrl+u"):
+                self.client.call("surface.send_key", {"surface_id": target["surface_id"], "key": key})
+            return self.client.call("terminal.paste", dict(target, text=text)) or {"ok": True}
+        if action == "interrupt":
+            hard = bool(body.get("hard"))
+            try:
+                return self.client.call("mobile.chat.interrupt", {"session_id": session_id, "hard": hard}) or {"ok": True}
+            except CmuxError as exc:
+                if exc.code not in ("not_found", "method_not_found"):
+                    raise
+            record = self.agents.get(session_id)
+            self.client.call("surface.send_key", {"surface_id": record.get("surface_id"),
+                                                   "key": "ctrl+c" if hard else "escape"})
+            return {"interrupted": True, "hard": hard}
+        return None
 
     def _dispatch_post(self, path: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         def need(key: str) -> str:
@@ -830,6 +961,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/key":
             self.client.call("surface.send_key", {"surface_id": need("surface_id"), "key": need("key")})
             return {"ok": True}
+        if path == "/api/peek":
+            # The visible screen, for prompts the transcript does not show yet.
+            result = self.client.call("surface.read_text", {"surface_id": need("surface_id")}) or {}
+            return {"text": screen_text(result)}
+        if path.startswith("/api/chat/"):
+            return self._chat(path[len("/api/chat/"):], body, need)
         if path == "/api/workspace/select":
             # This switches the workspace on the Mac screen too.
             self.client.call("workspace.select", {"workspace_id": need("workspace_id")})
@@ -1078,6 +1215,7 @@ def make_server(host: str, port: int, client: CmuxClient, hub: EventHub, token: 
     handler = type("BoundHandler", (Handler,), {
         "client": client,
         "hub": hub,
+        "agents": AgentSessions(client),
         "token": token,
         "allowed_origins": allowed_origins or [],
         "access_log": access_log,

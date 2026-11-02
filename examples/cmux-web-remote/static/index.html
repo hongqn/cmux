@@ -98,6 +98,56 @@
   #notifs .foot { border-top:1px solid #333; padding:8px 16px; font-size:11px; color:var(--mute); }
   #notifs .foot button { font-size:11px; padding:.2em .6em; }
   .empty { color:var(--mute); padding:1em; }
+  /* Agent chat view. */
+  .viewtoggle { border:0; background:#2c2c2c; color:var(--fg); padding:.15em .7em; margin:2px 4px; font-size:.8em; border-radius:10px; flex:none; }
+  .chat { flex:1; display:flex; flex-direction:column; min-height:0; background:var(--bg); }
+  .chat-scroll { flex:1; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; padding:12px 14px 8px; }
+  .chat-older { display:block; margin:0 auto 10px; font-size:12px; }
+  .msgs { display:flex; flex-direction:column; gap:10px; max-width:820px; margin:0 auto; font-size:14.5px; line-height:1.5; }
+  .msg { overflow-wrap:anywhere; }
+  .msg.user { align-self:flex-end; max-width:85%; background:#2f2f2f; border-radius:16px; padding:8px 13px; white-space:pre-wrap; }
+  .msg.user.pending { opacity:.55; } .msg.user.failed { outline:1px solid #e55; }
+  .msg.note { align-self:center; font-size:12px; color:var(--mute); }
+  .msg.bot p { margin:.35em 0; } .msg.bot ul, .msg.bot ol { margin:.35em 0; padding-left:1.4em; }
+  .msg.bot .h { font-weight:650; margin:.7em 0 .25em; } .msg.bot .h1 { font-size:1.2em; } .msg.bot .h2 { font-size:1.1em; }
+  .msg.bot code { font:12.5px ui-monospace,Menlo,monospace; background:#262626; padding:.05em .3em; border-radius:4px; }
+  .msg a { color:#5aa9ff; }
+  .msg blockquote { margin:.4em 0; padding-left:.8em; border-left:3px solid #3a3a3a; color:#bbb; }
+  .msg hr { border:0; border-top:1px solid #333; }
+  .tablewrap { overflow-x:auto; } .msg table { border-collapse:collapse; font-size:13px; margin:.4em 0; }
+  .msg th, .msg td { border:1px solid #333; padding:.25em .55em; text-align:left; vertical-align:top; }
+  pre.code { font:12px/1.4 ui-monospace,Menlo,monospace; background:#181818; border:1px solid #2a2a2a; border-radius:8px; padding:.6em .7em; overflow-x:auto; margin:.4em 0; white-space:pre; }
+  pre.diff .add { color:#7ee787; } pre.diff .del { color:#ff7b72; }
+  .steps { font-size:13px; color:var(--mute); }
+  .steps > summary { cursor:pointer; list-style:none; display:flex; gap:.6em; padding:2px 0; }
+  .steps > summary::before { content:"▸"; } .steps[open] > summary::before { content:"▾"; }
+  .steps .gl { flex:none; } .steps .gs { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#666; min-width:0; }
+  .step { margin:4px 0 4px 1em; }
+  .step > summary { cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:.45em; min-width:0; }
+  .step .st::before { content:"…"; color:var(--mute); } .step.ok .st::before { content:"✓"; color:#4caf50; } .step.err .st::before { content:"✗"; color:#e55; }
+  .step b { color:#ccc; font-weight:600; flex:none; } .step .ti { flex:none; width:1.1em; text-align:center; }
+  .step .ts { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .step .diffstat { flex:none; font-size:11px; } .diffstat i { color:#7ee787; font-style:normal; } .diffstat u { color:#ff7b72; text-decoration:none; }
+  .step .sb { margin-left:1.3em; }
+  .step pre.code { max-height:45vh; overflow:auto; }
+  .todos div { padding:1px 0; } .todos .completed { text-decoration:line-through; color:#666; }
+  .msg.question { background:#1d2733; border:1px solid #2b4767; border-radius:12px; padding:10px 12px; }
+  .question .qh { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#8fb8e8; }
+  .question .qo { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+  .question .qo button { text-align:left; display:flex; flex-direction:column; gap:2px; padding:.5em .7em; border-radius:9px; }
+  .question .qo span { font-size:12px; color:var(--mute); }
+  .question.answered .qo { display:none; } .question .answer { font-size:13px; color:#9fd09f; margin-top:6px; }
+  .question .answer:empty { display:none; }
+  .chat-status { flex:none; display:flex; align-items:center; gap:.6em; padding:0 14px; font-size:13px; color:var(--mute); }
+  .chat-status:empty { display:none; }
+  .chat-status.working { padding:6px 14px; } .chat-status.working button { margin-left:auto; }
+  .chat-status.ended, .chat-status.error { padding:6px 14px; }
+  .chat-status.needs_input { flex-direction:column; align-items:stretch; padding:8px 12px; background:#2a2312; border-top:1px solid #6b5520; color:#f0d48a; }
+  .peek { margin:6px 0; max-height:40vh; overflow:auto; font:11px/1.25 ui-monospace,Menlo,monospace; background:#000; color:#ddd; padding:6px; border-radius:6px; white-space:pre; }
+  .peek-keys { display:flex; gap:6px; flex-wrap:wrap; } .peek-keys button { min-width:44px; }
+  .spin { width:10px; height:10px; border-radius:50%; border:2px solid var(--acc); border-right-color:transparent; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  body.chat-mode #sendRawBtn { display:none; }
   #toggleSide { display:none; }
   #scrim { display:none; }
   @media (max-width: 900px) {
@@ -125,7 +175,13 @@
     .tab { font-size:13px; padding:.45em .8em; }
     .zoom { display:none; }
     #paneStrip ~ .pane.single .tab { display:none; }  /* the chip above already names it */
+    /* ...so its bar keeps only buttons; float them into the chip row. */
+    #panes { position:relative; }
+    #paneStrip { padding-right:110px; }
+    #paneStrip ~ .pane.single .tabs { position:absolute; top:0; right:0; height:44px; align-items:center; background:#161616; padding:0 4px 0 8px; z-index:2; }
     .fontmode { display:block; font-size:13px; }
+    .msgs { font-size:15.5px; } .chat-scroll { padding:10px 10px 6px; }
+    .viewtoggle { font-size:13px; padding:.3em .8em; }
     /* Compact input bar: text box and send on one row, keys in one scrolling row. */
     #target { display:none; }
     #bar { gap:.35em; padding:.4em; padding-bottom:max(.4em, env(safe-area-inset-bottom)); }
@@ -195,7 +251,12 @@ const state = {
   zoomPane: null,      // pane shown alone, when zoomed
   fromBottom: {},
   // Phones: "fit" shrinks the font to show every column; "read" keeps it legible and scrolls sideways.
-  fontMode: localStorage.getItem("cmuxWebFontMode") || "fit",      // surfaceId -> px scrolled up from the bottom (absent = follow the bottom)
+  fontMode: localStorage.getItem("cmuxWebFontMode") || "fit",
+  // Claude Code terminals: "chat" (transcript) or "terminal" (screen); phones default to chat.
+  viewPref: localStorage.getItem("cmuxWebAgentView") || (PHONE.matches ? "chat" : "terminal"),
+  viewBySurface: {},
+  chats: {},           // sessionId -> chat view state and its DOM
+  chatPolls: {},       // sessionId -> {abort}      // surfaceId -> px scrolled up from the bottom (absent = follow the bottom)
 };
 
 async function api(path, body, signal) {
@@ -419,9 +480,10 @@ function renderWorkspace() {
     root.replaceChildren(...[node, ...rest].filter(Boolean));
   }
   // Panes are built detached, where scrollHeight is 0; place them once attached.
-  for (const pre of root.querySelectorAll("pre.term")) restoreScroll(pre);
+  for (const pre of root.querySelectorAll("pre.term, .chat-scroll")) restoreScroll(pre);
   updateTarget();
   restartPolling();
+  restartChatPolls();
   markPaneRead();
 }
 
@@ -496,7 +558,22 @@ function buildPane(pane) {
     tabs.append(t);
   }
   tabs.append(el("span", { className: "spacer" }));
-  if (shown && shown.type === "terminal") {
+  const view = viewFor(shown);
+  if (shown && shown.agent && shown.agent.chat) {
+    const vt = el("button", { className: "viewtoggle", textContent: view === "chat" ? "Terminal" : "Chat",
+                              title: view === "chat" ? "Show the terminal screen" : "Show the conversation" });
+    vt.onclick = (e) => {
+      e.stopPropagation();
+      const next = view === "chat" ? "terminal" : "chat";
+      state.viewBySurface[shown.id] = next;
+      state.viewPref = next;
+      localStorage.setItem("cmuxWebAgentView", next);
+      state.activePane = pane.id;
+      renderWorkspace();
+    };
+    tabs.append(vt);
+  }
+  if (shown && shown.type === "terminal" && view === "terminal") {
     const fm = el("button", { className: "fontmode", textContent: state.fontMode === "fit" ? "Aa+" : "Aa−",
                               title: state.fontMode === "fit" ? "Larger text, scroll sideways" : "Fit every column" });
     fm.onclick = (e) => {
@@ -520,7 +597,14 @@ function buildPane(pane) {
     updateTarget();
     markPaneRead();
   };
-  if (shown && shown.type === "terminal") {
+  if (shown && view === "chat") {
+    const chat = chatState(shown.agent.session_id);
+    chat.surfaceId = shown.id;
+    chat.root.dataset.session = shown.agent.session_id;
+    chat.scroll.dataset.surface = shown.id + ":chat";
+    if (!chat.loaded) chat.status.textContent = "Loading conversation…";
+    box.append(chat.root);
+  } else if (shown && shown.type === "terminal") {
     const pre = el("pre", { className: "term" });
     pre.dataset.surface = shown.id;
     pre.addEventListener("scroll", () => rememberScroll(pre), { passive: true });
@@ -542,7 +626,346 @@ function activeTerminal() {
 
 function updateTarget() {
   const s = activeTerminal();
-  $("target").textContent = s ? "Typing into: " + (s.title || s.ref) : "Click a terminal pane to type into it.";
+  const chat = chatSurface();
+  $("target").textContent = chat ? "Message to Claude in: " + (s.title || s.ref)
+    : s ? "Typing into: " + (s.title || s.ref) : "Click a terminal pane to type into it.";
+  document.body.classList.toggle("chat-mode", !!chat);
+  $("input").placeholder = chat ? (PHONE.matches ? "Message Claude" : "Message Claude; Enter sends, Shift+Enter for a new line")
+    : PHONE.matches ? "Type here; Enter sends" : "Type text, Enter sends it with a newline, Shift+Enter for a new line";
+  $("input").enterKeyHint = chat && PHONE.matches ? "enter" : "send";
+}
+
+// ---- agent chat view ----------------------------------------------------------
+// Terminals running Claude Code can show their conversation instead of the
+// screen: read from the session's transcript, so text wraps to the page rather
+// than to the terminal's columns. Input still goes to the same terminal.
+
+function viewFor(s) {
+  if (!s || s.type !== "terminal" || !(s.agent && s.agent.chat)) return "terminal";
+  return state.viewBySurface[s.id] || state.viewPref;
+}
+function chatSurface() {
+  const s = activeTerminal();
+  return s && viewFor(s) === "chat" ? s : null;
+}
+
+function esc(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Markdown subset: fences, headings, lists, quotes, tables, rules, inline code,
+// bold, italics, http(s) links. Text is escaped before any markup is added.
+function mdInline(raw) {
+  const codes = [];
+  let s = esc(raw).replace(/`([^`\n]+)`/g, (m, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
+  s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>").replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<i>$2</i>");
+  return s.replace(/\u0000(\d+)\u0000/g, (m, i) => `<code>${codes[+i]}</code>`);
+}
+
+function md(text) {
+  const lines = text.replace(/\r/g, "").split("\n");
+  const out = [];
+  const isList = (l) => /^\s*([-*+]|\d+[.)])\s+/.test(l);
+  const isBlockStart = (l) => /^\s*(```|#{1,6}\s|>|([-*+]|\d+[.)])\s+|\|)/.test(l);
+  let i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^\s*```/.test(l)) {
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+      i++;
+      out.push(`<pre class="code">${esc(buf.join("\n"))}</pre>`);
+    } else if (/^\s*\|.*\|\s*$/.test(l) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const row = (r) => r.trim().replace(/^\||\|$/g, "").split("|").map((c) => mdInline(c.trim()));
+      const head = row(l);
+      i += 2;
+      const body = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) body.push(row(lines[i++]));
+      out.push(`<div class="tablewrap"><table><tr>${head.map((c) => `<th>${c}</th>`).join("")}</tr>` +
+        body.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("") + "</table></div>");
+    } else if (/^#{1,6}\s/.test(l)) {
+      const level = l.match(/^#+/)[0].length;
+      out.push(`<div class="h h${Math.min(level, 3)}">${mdInline(l.replace(/^#+\s*/, ""))}</div>`);
+      i++;
+    } else if (isList(l)) {
+      const ordered = /^\s*\d/.test(l);
+      const items = [];
+      while (i < lines.length && (isList(lines[i]) || (/^\s{2,}\S/.test(lines[i]) && items.length))) {
+        const m = lines[i].match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+        if (m) items.push({ indent: m[1].length, text: m[3] });
+        else items[items.length - 1].text += " " + lines[i].trim();
+        i++;
+      }
+      const tag = ordered ? "ol" : "ul";
+      out.push(`<${tag}>` + items.map((it) => `<li style="margin-left:${Math.min(it.indent, 8) * 0.6}em">${mdInline(it.text)}</li>`).join("") + `</${tag}>`);
+    } else if (/^\s*>/.test(l)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ""));
+      out.push(`<blockquote>${md(buf.join("\n"))}</blockquote>`);
+    } else if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(l)) {
+      out.push("<hr>");
+      i++;
+    } else if (!l.trim()) {
+      i++;
+    } else {
+      const buf = [];
+      while (i < lines.length && lines[i].trim() && !(buf.length && isBlockStart(lines[i]))) buf.push(lines[i++]);
+      out.push(`<p>${buf.map(mdInline).join("<br>")}</p>`);
+    }
+  }
+  return out.join("");
+}
+
+const TOOL_ICONS = { Bash: "$", Edit: "✎", MultiEdit: "✎", Write: "✎", NotebookEdit: "✎", Read: "📄", Grep: "🔍", Glob: "🔍",
+                     WebFetch: "🌐", WebSearch: "🌐", Task: "◆", Agent: "◆", TodoWrite: "☑", AskUserQuestion: "?" };
+
+function chatState(sid) {
+  if (!state.chats[sid]) {
+    const scroll = el("div", { className: "chat-scroll" });
+    const older = el("button", { className: "chat-older", textContent: "Load earlier messages", hidden: true });
+    const msgs = el("div", { className: "msgs" });
+    const status = el("div", { className: "chat-status" });
+    scroll.append(older, msgs);
+    const root = el("div", { className: "chat" }, scroll, status);
+    const chat = state.chats[sid] = { sid, root, scroll, older, msgs, status, results: {}, tools: {}, questions: {},
+                                      start: 0, end: 0, state: "", loaded: false, peek: "", surfaceId: null };
+    scroll.addEventListener("scroll", () => {
+      rememberScroll(scroll);
+      if (scroll.scrollTop < 80 && chat.start > 0 && !chat.loadingOlder) loadOlder(chat);
+    }, { passive: true });
+    older.onclick = () => loadOlder(chat);
+  }
+  return state.chats[sid];
+}
+
+function toolRow(item) {
+  const row = el("details", { className: "step" });
+  row.dataset.call = item.id;
+  const icon = TOOL_ICONS[item.tool] || "⚙";
+  const name = item.tool.startsWith("mcp__") ? item.tool.split("__").slice(-1)[0] : item.tool;
+  const head = el("summary", {},
+    el("span", { className: "st" }),
+    el("span", { className: "ti", textContent: icon }),
+    el("b", { textContent: name }),
+    el("span", { className: "ts", textContent: item.tool === "Bash" ? (item.note || item.summary) : item.summary || "" }));
+  if (item.additions || item.deletions) {
+    head.append(el("span", { className: "diffstat", innerHTML: `<i>+${item.additions}</i> <u>−${item.deletions}</u>` }));
+  }
+  row.append(head);
+  const body = el("div", { className: "sb" });
+  if (item.command) body.append(el("pre", { className: "code", textContent: "$ " + item.command }));
+  if (item.diff) {
+    const pre = el("pre", { className: "code diff" });
+    for (const line of item.diff.split("\n")) {
+      pre.append(el("span", { className: line[0] === "+" ? "add" : line[0] === "-" ? "del" : "", textContent: line + "\n" }));
+    }
+    body.append(pre);
+  }
+  if (item.todos) {
+    body.append(el("div", { className: "todos", innerHTML: item.todos.map((t) =>
+      `<div class="${t.status}">${t.status === "completed" ? "☑" : t.status === "in_progress" ? "◐" : "☐"} ${esc(t.text)}</div>`).join("") }));
+  }
+  if (item.detail) body.append(el("pre", { className: "code", textContent: item.detail }));
+  body.append(el("pre", { className: "code out", hidden: true }));
+  row.append(body);
+  return row;
+}
+
+function applyResult(chat, result) {
+  const row = chat.tools[result.call_id];
+  if (row) {
+    row.classList.add(result.is_error ? "err" : "ok");
+    const out = row.querySelector("pre.out");
+    if (result.text) { out.hidden = false; out.textContent = result.text; }
+    refreshGroup(row.closest(".steps"));
+  }
+  for (const card of chat.questions[result.call_id] || []) {
+    card.classList.add("answered");
+    const ans = card.querySelector(".answer");
+    ans.textContent = result.text.replace(/^User has answered[^:]*:\s*/i, "").slice(0, 400);
+  }
+}
+
+function refreshGroup(group) {
+  if (!group) return;
+  const rows = group.querySelectorAll(".step");
+  const errors = group.querySelectorAll(".step.err").length;
+  const running = [...rows].filter((r) => !r.classList.contains("ok") && !r.classList.contains("err")).length;
+  const last = rows[rows.length - 1];
+  const lastText = last ? last.querySelector("b").textContent + " " + last.querySelector(".ts").textContent : "";
+  group.querySelector(":scope > summary .gl").textContent =
+    `${rows.length} step${rows.length === 1 ? "" : "s"}` + (errors ? ` · ${errors} failed` : "") + (running ? " · running" : "");
+  group.querySelector(":scope > summary .gs").textContent = lastText;
+}
+
+function itemNode(chat, item) {
+  if (item.kind === "user") return el("div", { className: "msg user", textContent: item.text });
+  if (item.kind === "assistant") return el("div", { className: "msg bot", innerHTML: md(item.text) });
+  if (item.kind === "note") return el("div", { className: "msg note", textContent: item.text });
+  if (item.kind === "question") {
+    const card = el("div", { className: "msg question" },
+      el("div", { className: "qh", textContent: item.header || "Question" }),
+      el("div", { className: "qp", innerHTML: md(item.prompt) }));
+    const opts = el("div", { className: "qo" });
+    item.options.forEach((o, i) => {
+      const b = el("button", {}, el("b", { textContent: `${i + 1}. ${o.label}` }), o.detail ? el("span", { textContent: o.detail }) : null);
+      b.onclick = () => answer(chat, i);
+      opts.append(b);
+    });
+    card.append(opts, el("div", { className: "answer" }));
+    (chat.questions[item.call_id] = chat.questions[item.call_id] || []).push(card);
+    return card;
+  }
+  return null;
+}
+
+// Append items in transcript order; consecutive tool calls share one collapsed group.
+function addItems(chat, items, prepend) {
+  const frag = document.createDocumentFragment();
+  let group = prepend ? null : (chat.msgs.lastElementChild && chat.msgs.lastElementChild.classList.contains("steps") ? chat.msgs.lastElementChild : null);
+  const results = [];
+  for (const item of items) {
+    if (item.kind === "result") { results.push(item); continue; }
+    if (item.kind === "tool") {
+      if (!group) {
+        group = el("details", { className: "steps" }, el("summary", {}, el("span", { className: "gl" }), el("span", { className: "gs" })));
+        frag.append(group);
+      }
+      const row = toolRow(item);
+      chat.tools[item.id] = row;
+      group.append(row);
+      refreshGroup(group);
+      continue;
+    }
+    if (item.kind === "user") chat.msgs.querySelectorAll(".msg.pending").forEach((p) => p.remove());
+    const node = itemNode(chat, item);
+    if (node) { group = null; frag.append(node); }
+  }
+  if (prepend) chat.msgs.prepend(frag); else chat.msgs.append(frag);
+  for (const r of results) { chat.results[r.call_id] = r; applyResult(chat, r); }
+  // Results that arrived before their call (loaded older pages later).
+  if (prepend) for (const r of Object.values(chat.results)) applyResult(chat, r);
+}
+
+async function loadOlder(chat) {
+  chat.loadingOlder = true;
+  try {
+    const page = await api("/api/chat/history", { session_id: chat.sid, before: chat.start });
+    const fromBottom = chat.scroll.scrollHeight - chat.scroll.scrollTop;
+    addItems(chat, page.items, true);
+    chat.start = page.start;
+    chat.older.hidden = chat.start <= 0;
+    chat.scroll.scrollTop = chat.scroll.scrollHeight - fromBottom;
+  } catch (e) { /* try again on the next scroll */ }
+  chat.loadingOlder = false;
+}
+
+function setChatState(chat, value) {
+  chat.state = value;
+  const st = chat.status;
+  st.replaceChildren();
+  st.className = "chat-status " + value;
+  if (value === "working") {
+    const stop = el("button", { textContent: "Stop" });
+    stop.onclick = () => api("/api/chat/interrupt", { session_id: chat.sid }).catch(() => {});
+    st.append(el("span", { className: "spin" }), el("span", { textContent: "Claude is working…" }), stop);
+  } else if (value === "needs_input") {
+    // Permission prompts are drawn in the terminal and reach the transcript only
+    // once answered, so show the bottom of the screen with number keys.
+    const keys = el("div", { className: "peek-keys" });
+    for (const n of ["1", "2", "3"]) {
+      const b = el("button", { textContent: n });
+      b.onclick = () => chat.surfaceId && api("/api/send", { surface_id: chat.surfaceId, text: n, enter: false }).then(() => refreshPeek(chat));
+      keys.append(b);
+    }
+    const escB = el("button", { textContent: "Esc" });
+    escB.onclick = () => chat.surfaceId && api("/api/key", { surface_id: chat.surfaceId, key: "escape" }).then(() => refreshPeek(chat));
+    const term = el("button", { textContent: "Terminal" });
+    term.onclick = () => { state.viewBySurface[chat.surfaceId] = "terminal"; renderWorkspace(); };
+    keys.append(escB, term);
+    st.append(el("div", { className: "peek-head", textContent: "Claude needs your input" }), el("pre", { className: "peek", textContent: chat.peek }), keys);
+    refreshPeek(chat);
+  } else if (value === "ended") {
+    st.append(el("span", { textContent: "This session has ended." }));
+  }
+}
+
+async function refreshPeek(chat) {
+  if (!chat.surfaceId) return;
+  try {
+    const r = await api("/api/peek", { surface_id: chat.surfaceId });
+    const lines = (r.text || "").replace(/\s+$/, "").split("\n");
+    chat.peek = lines.slice(-14).join("\n");
+    const pre = chat.status.querySelector(".peek");
+    if (pre) pre.textContent = chat.peek;
+  } catch (e) { /* keep the last one */ }
+}
+
+function answer(chat, index) {
+  if (!chat.surfaceId) return;
+  api("/api/send", { surface_id: chat.surfaceId, text: String(index + 1), enter: false }).then(() => refreshPeek(chat)).catch(() => {});
+}
+
+async function chatLoop(poll, sid) {
+  const chat = chatState(sid);
+  while (state.chatPolls[sid] === poll) {
+    await untilVisible(poll);
+    if (state.chatPolls[sid] !== poll) return;
+    try {
+      if (!chat.loaded) {
+        const page = await api("/api/chat/history", { session_id: sid }, poll.abort.signal);
+        chat.msgs.replaceChildren();
+        Object.assign(chat, { results: {}, tools: {}, questions: {}, start: page.start, end: page.end, loaded: true });
+        addItems(chat, page.items, false);
+        chat.older.hidden = chat.start <= 0;
+        setChatState(chat, page.state);
+        restoreScroll(chat.scroll);
+        continue;
+      }
+      const upd = await api("/api/chat/poll", { session_id: sid, after: chat.end, state: chat.state }, poll.abort.signal);
+      if (state.chatPolls[sid] !== poll) return;
+      if (upd.reset) { chat.loaded = false; continue; }
+      chat.end = upd.end;
+      if (upd.items.length) { addItems(chat, upd.items, false); restoreScroll(chat.scroll); }
+      if (upd.state !== chat.state) setChatState(chat, upd.state);
+      else if (upd.state === "needs_input") refreshPeek(chat);
+    } catch (e) {
+      if (state.chatPolls[sid] !== poll || e.name === "AbortError") return;
+      chat.status.className = "chat-status error";
+      chat.status.textContent = "Chat unavailable: " + e.message;
+      await new Promise((ok) => setTimeout(ok, 3000));
+    }
+  }
+}
+
+function restartChatPolls() {
+  const want = new Set([...document.querySelectorAll("#panes .chat")].map((c) => c.dataset.session));
+  for (const [sid, poll] of Object.entries(state.chatPolls)) {
+    if (!want.has(sid)) { poll.abort.abort(); delete state.chatPolls[sid]; }
+  }
+  for (const sid of want) {
+    if (state.chatPolls[sid]) continue;
+    const poll = state.chatPolls[sid] = { abort: new AbortController() };
+    chatLoop(poll, sid);
+  }
+}
+
+async function sendChat(s, text) {
+  const chat = chatState(s.agent.session_id);
+  const pending = el("div", { className: "msg user pending", textContent: text });
+  chat.msgs.append(pending);
+  delete state.fromBottom[chat.scroll.dataset.surface];
+  restoreScroll(chat.scroll);
+  try {
+    await api("/api/chat/send", { session_id: s.agent.session_id, text });
+  } catch (e) {
+    pending.classList.add("failed");
+    pending.title = e.message;
+    throw e;
+  }
 }
 
 // ---- terminal painting ------------------------------------------------------
@@ -687,6 +1110,13 @@ async function send(enter) {
   const s = activeTerminal();
   if (!s) return;
   const text = $("input").value;
+  if (chatSurface()) {
+    if (!text.trim()) return;
+    $("input").value = "";
+    growInput();
+    await sendChat(s, text).catch(() => { $("input").value = text; growInput(); });
+    return;
+  }
   if (!text && !enter) return;
   await api("/api/send", { surface_id: s.id, text, enter });
   $("input").value = "";
@@ -711,6 +1141,8 @@ for (const b of document.querySelectorAll("#bar button")) {
 $("sendBtn").onclick = () => send(true);
 $("sendRawBtn").onclick = () => send(false);
 $("input").addEventListener("keydown", (e) => {
+  // In chat on a phone, Return adds a line like a messaging app; Send sends.
+  if (chatSurface() && PHONE.matches) return;
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(true); }
 });
 for (const b of document.querySelectorAll("#keys button[data-key]")) {
@@ -839,7 +1271,7 @@ $("toggleSide").onclick = () => document.body.classList.toggle("show-side");
 $("scrim").onclick = () => document.body.classList.remove("show-side");
 
 function applyPhoneLayout() {
-  $("input").placeholder = PHONE.matches ? "Type here; Enter sends" : "Type text, Enter sends it with a newline, Shift+Enter for a new line";
+  updateTarget();
   growInput();
   if (state.tree) renderWorkspace();
 }
