@@ -32,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import parse_qs, urlparse
@@ -755,6 +756,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         query = parse_qs(url.query)
         if url.path == "/login":
             return self._login(query)
+        # Fetched by the browser without cookies when adding to the Home Screen; nothing secret.
+        if url.path == "/manifest.webmanifest":
+            return self._send_bytes(json.dumps(MANIFEST).encode(), "application/manifest+json", "max-age=86400")
+        if url.path in ICON_SIZES:
+            return self._send_bytes(icon_png(ICON_SIZES[url.path]), "image/png", "max-age=86400")
         if url.path in ("/", "/index.html"):
             if not self._authorized():
                 return self._send_login_page()
@@ -901,6 +907,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(html)
 
+    def _send_bytes(self, data: bytes, content_type: str, cache: str) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", cache)
+        self.end_headers()
+        self.wfile.write(data)
+
     def _send_file(self, path: str, content_type: str) -> None:
         with open(path, "rb") as f:
             data = f.read()
@@ -940,6 +954,58 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 TLS_HANDSHAKE_SECONDS = 10
+
+
+MANIFEST = {
+    "name": "cmux web remote",
+    "short_name": "cmux",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#111111",
+    "theme_color": "#111111",
+    "icons": [
+        {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"},
+    ],
+}
+ICON_SIZES = {"/apple-touch-icon.png": 180, "/icon-192.png": 192, "/icon-512.png": 512, "/favicon.ico": 32}
+_icon_cache: Dict[int, bytes] = {}
+
+
+def icon_png(size: int) -> bytes:
+    """A ">_" prompt on a dark square, drawn here so the example ships no binary files."""
+    if size in _icon_cache:
+        return _icon_cache[size]
+    bg, fg = (0x1E, 0x1E, 0x1E), (0x0A, 0x84, 0xFF)
+    half = 0.045 * size
+    segments = [((0.27, 0.32), (0.47, 0.50)), ((0.47, 0.50), (0.27, 0.68))]
+    segments = [((ax * size, ay * size), (bx * size, by * size)) for (ax, ay), (bx, by) in segments]
+    bar = (0.53 * size, 0.62 * size, 0.75 * size, 0.62 * size + 2 * half)
+
+    def on(x: float, y: float) -> bool:
+        if bar[0] <= x <= bar[2] and bar[1] <= y <= bar[3]:
+            return True
+        for (ax, ay), (bx, by) in segments:
+            dx, dy = bx - ax, by - ay
+            t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy)))
+            if (x - ax - t * dx) ** 2 + (y - ay - t * dy) ** 2 <= half * half:
+                return True
+        return False
+
+    rows = bytearray()
+    for y in range(size):
+        rows.append(0)
+        for x in range(size):
+            rows.extend(fg if on(x + 0.5, y + 0.5) else bg)
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return len(data).to_bytes(4, "big") + kind + data + zlib.crc32(kind + data).to_bytes(4, "big")
+
+    header = size.to_bytes(4, "big") * 2 + bytes([8, 2, 0, 0, 0])
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(bytes(rows), 9)) + chunk(b"IEND", b"")
+    _icon_cache[size] = png
+    return png
 
 
 class Server(http.server.ThreadingHTTPServer):

@@ -3,17 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111111">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="cmux">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <title>cmux web remote</title>
 <style>
   :root { color-scheme: dark; --bg:#111; --panel:#1e1e1e; --line:#2c2c2c; --fg:#ddd; --mute:#888; --acc:#0a84ff; --warn:#e8a33d; }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui,-apple-system,sans-serif; height:100dvh; display:flex; flex-direction:column; }
-  header { display:flex; align-items:center; gap:.6em; padding:.5em .8em; border-bottom:1px solid var(--line); }
+  html { -webkit-text-size-adjust:100%; text-size-adjust:100%; }
+  /* --vvh follows the visual viewport, so the input bar stays above the on-screen keyboard. */
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui,-apple-system,sans-serif; height:var(--vvh, 100dvh); display:flex; flex-direction:column; overflow:hidden;
+         padding-left:env(safe-area-inset-left); padding-right:env(safe-area-inset-right); }
+  header { display:flex; align-items:center; gap:.6em; padding:.5em .8em; padding-top:max(.5em, env(safe-area-inset-top)); border-bottom:1px solid var(--line); flex:none; }
   header h1 { font-size:1em; margin:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   #status { font-size:.85em; color:var(--mute); white-space:nowrap; }
   #status.ok::before { content:"● "; color:#4caf50; }
   #status.bad::before { content:"● "; color:#e55; }
-  button { background:#2a2a2a; color:var(--fg); border:1px solid #3a3a3a; border-radius:6px; padding:.35em .7em; font:inherit; cursor:pointer; }
+  button { background:#2a2a2a; color:var(--fg); border:1px solid #3a3a3a; border-radius:6px; padding:.35em .7em; font:inherit; cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
   button:hover { border-color:var(--acc); }
   main { flex:1; display:flex; min-height:0; }
   #side { width:280px; flex:none; border-right:1px solid var(--line); overflow-y:auto; overflow-x:hidden; background:var(--panel); padding:0 6px 8px; }
@@ -51,11 +61,14 @@
   .tab { border:0; border-radius:0; background:none; color:var(--mute); padding:.25em .7em; font-size:.8em; white-space:nowrap; max-width:16em; overflow:hidden; text-overflow:ellipsis; }
   .tab.on { color:var(--fg); background:#262626; box-shadow:inset 0 -2px var(--acc); }
   .tab.mac::after { content:" ●"; color:var(--acc); }
-  .zoom { margin-left:auto; border:0; background:none; color:var(--mute); padding:0 .6em; font-size:.9em; flex:none; }
-  .term { flex:1; margin:0; padding:.3em .4em; overflow:auto; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; line-height:1.2; white-space:pre; }
+  .zoom, .fontmode { border:0; background:none; color:var(--mute); padding:0 .6em; font-size:.9em; flex:none; }
+  .tabs .spacer { margin-left:auto; }
+  .fontmode { display:none; }
+  #paneStrip { display:none; }
+  .term { flex:1; margin:0; padding:.3em .4em; overflow:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; line-height:1.2; white-space:pre; }
   .term .cur { outline:1px solid currentColor; }
   .note { flex:1; display:flex; align-items:center; justify-content:center; color:var(--mute); padding:1em; text-align:center; word-break:break-all; }
-  #bar { display:flex; flex-wrap:wrap; gap:.4em; padding:.5em; border-top:1px solid var(--line); background:var(--panel); }
+  #bar { display:flex; flex-wrap:wrap; gap:.4em; padding:.5em; padding-bottom:max(.5em, env(safe-area-inset-bottom)); border-top:1px solid var(--line); background:var(--panel); flex:none; }
   #target { width:100%; font-size:.8em; color:var(--mute); }
   #input { flex:1 1 240px; min-height:2.4em; max-height:8em; background:#0f0f0f; color:var(--fg); border:1px solid #3a3a3a; border-radius:6px; padding:.4em; font:13px ui-monospace,Menlo,monospace; resize:vertical; }
   #keys { display:flex; flex-wrap:wrap; gap:.3em; width:100%; }
@@ -64,7 +77,7 @@
   #bell { position:relative; padding:.3em .55em; }
   #bell svg { width:16px; height:16px; vertical-align:-3px; }
   #bell .badge { position:absolute; top:-5px; right:-6px; }
-  #notifs { position:fixed; top:46px; right:10px; z-index:10; width:400px; max-height:calc(100dvh - 60px); display:none; flex-direction:column; background:#232323; border:1px solid #3a3a3a; border-radius:12px; box-shadow:0 12px 40px rgba(0,0,0,.5); }
+  #notifs { position:fixed; top:calc(46px + env(safe-area-inset-top)); right:10px; z-index:10; width:400px; max-height:calc(100dvh - 60px); display:none; flex-direction:column; background:#232323; border:1px solid #3a3a3a; border-radius:12px; box-shadow:0 12px 40px rgba(0,0,0,.5); }
   body.show-notifs #notifs { display:flex; }
   #notifs .head { display:flex; align-items:center; gap:8px; padding:12px 16px; }
   #notifs .head h2 { font-size:17px; font-weight:600; margin:0; flex:1; }
@@ -86,15 +99,42 @@
   #notifs .foot button { font-size:11px; padding:.2em .6em; }
   .empty { color:var(--mute); padding:1em; }
   #toggleSide { display:none; }
+  #scrim { display:none; }
   @media (max-width: 900px) {
     #toggleSide { display:inline-block; }
-    #side { position:fixed; top:2.6em; bottom:0; left:0; z-index:5; width:85vw; display:none; }
+    header { padding-left:.5em; padding-right:.5em; gap:.4em; }
+    header button { min-width:40px; min-height:36px; }
+    #status { font-size:0; } #status::before { font-size:13px; }  /* the dot alone */
+    /* Drawer over the page, with a scrim that closes it. */
+    #side { position:fixed; top:0; bottom:0; left:0; z-index:6; width:min(85vw, 340px); display:none;
+            padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); }
     body.show-side #side { display:block; }
+    body.show-side #scrim { display:block; position:fixed; inset:0; z-index:5; background:rgba(0,0,0,.5); }
+    .ws { padding:10px 12px 11px 14px; }
+    .ws-title { font-size:15px; } .ws .desc { font-size:12.5px; } .ws .sub, .ws .line, .ws .mono, .ws .links { font-size:12px; }
+    #filter { font-size:16px; }
     #notifs { left:8px; right:8px; width:auto; }
-    /* Phones: stack every pane, each tall enough to read. */
-    #panes { overflow-y:auto; display:block; }
-    .split, .split.h, .split.v { display:block; }
-    .pane { flex:none !important; height:60vh; margin-bottom:4px; }
+    /* Phones: one pane at a time, filling the space; a strip switches panes. */
+    #panes { flex-direction:column; }
+    #paneStrip { display:flex; gap:6px; padding:6px; overflow-x:auto; background:#161616; flex:none; scrollbar-width:none; }
+    #paneStrip button { flex:none; max-width:60vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; padding:.3em .8em; border-radius:14px; }
+    #paneStrip button.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+    #paneStrip button.unread::after { content:" ●"; color:var(--acc); }
+    #paneStrip button.on.unread::after { color:#fff; }
+    .pane { flex:1 1 0 !important; border:0; }
+    .tab { font-size:13px; padding:.45em .8em; }
+    .zoom { display:none; }
+    #paneStrip ~ .pane.single .tab { display:none; }  /* the chip above already names it */
+    .fontmode { display:block; font-size:13px; }
+    /* Compact input bar: text box and send on one row, keys in one scrolling row. */
+    #target { display:none; }
+    #bar { gap:.35em; padding:.4em; padding-bottom:max(.4em, env(safe-area-inset-bottom)); }
+    #input { flex:1 1 0; min-width:0; font-size:16px; min-height:0; height:2.3em; resize:none; padding:.35em .5em; }
+    #sendBtn, #sendRawBtn { padding:.35em .6em; }
+    #keys { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; gap:.35em; }
+    #keys::-webkit-scrollbar, #paneStrip::-webkit-scrollbar { display:none; }
+    #keys button { flex:none; min-height:36px; min-width:44px; font-size:14px; }
+    #showOnMac { margin-left:0 !important; }
   }
 </style>
 </head>
@@ -106,12 +146,14 @@
   <button id="bell" title="Notifications"><svg viewBox="0 0 16 16"><path fill="currentColor" d="M8 15.5a2 2 0 0 0 2-2H6a2 2 0 0 0 2 2zm5.5-4.2-1-1.3V7a4.5 4.5 0 0 0-3.6-4.4V2a.9.9 0 1 0-1.8 0v.6A4.5 4.5 0 0 0 3.5 7v3l-1 1.3a.6.6 0 0 0 .5 1h10a.6.6 0 0 0 .5-1z"/></svg><span id="unreadCount" class="badge" hidden>0</span></button>
 </header>
 <main>
+  <div id="scrim"></div>
   <nav id="side"><input id="filter" type="search" placeholder="Filter workspaces"><div id="wslist"><div class="empty">Loading…</div></div></nav>
   <section id="view">
     <div id="panes"><div class="empty">Pick a workspace on the left.</div></div>
     <div id="bar">
       <div id="target">Click a terminal pane to type into it.</div>
-      <textarea id="input" placeholder="Type text, Enter sends it with a newline, Shift+Enter for a new line"></textarea>
+      <textarea id="input" rows="1" placeholder="Type text, Enter sends it with a newline, Shift+Enter for a new line"
+        autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" enterkeyhint="send"></textarea>
       <button id="sendBtn">Send ⏎</button>
       <button id="sendRawBtn" title="Send without pressing Enter">Send</button>
       <div id="keys">
@@ -119,11 +161,14 @@
         <button data-key="escape">Esc</button>
         <button data-key="ctrl+c">Ctrl‑C</button>
         <button data-key="tab">Tab</button>
+        <button data-key="shift+tab" title="Shift+Tab">⇧Tab</button>
         <button data-key="up">↑</button>
         <button data-key="down">↓</button>
         <button data-key="left">←</button>
         <button data-key="right">→</button>
         <button data-key="ctrl+d">Ctrl‑D</button>
+        <button data-key="pageup">PgUp</button>
+        <button data-key="pagedown">PgDn</button>
         <button id="showOnMac" style="margin-left:auto" title="Switch the Mac's window to this workspace">Show on Mac</button>
       </div>
     </div>
@@ -137,6 +182,7 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
+const PHONE = matchMedia("(max-width: 900px)");
 const state = {
   tree: null,
   wsId: null,          // workspace shown in the main area
@@ -147,7 +193,9 @@ const state = {
   expanded: new Set(), // workspaces whose status list shows all pills
   poll: null,          // {key, abort}
   zoomPane: null,      // pane shown alone, when zoomed
-  fromBottom: {},      // surfaceId -> px scrolled up from the bottom (absent = follow the bottom)
+  fromBottom: {},
+  // Phones: "fit" shrinks the font to show every column; "read" keeps it legible and scrolls sideways.
+  fontMode: localStorage.getItem("cmuxWebFontMode") || "fit",      // surfaceId -> px scrolled up from the bottom (absent = follow the bottom)
 };
 
 async function api(path, body, signal) {
@@ -354,7 +402,11 @@ function renderWorkspace() {
     const anyTerm = ws.panes.find((p) => (shownSurface(p) || {}).type === "terminal");
     state.activePane = (focused || anyTerm || ws.panes[0] || {}).id || null;
   }
-  if (state.zoomPane && panesById[state.zoomPane]) {
+  if (PHONE.matches) {
+    const only = buildPane(panesById[state.activePane] || ws.panes[0]);
+    only.style.flex = "1 1 0";
+    root.replaceChildren(...[ws.panes.length > 1 ? paneStrip(ws) : null, only].filter(Boolean));
+  } else if (state.zoomPane && panesById[state.zoomPane]) {
     const only = buildPane(panesById[state.zoomPane]);
     only.style.flex = "1 1 0";
     root.replaceChildren(only);
@@ -391,6 +443,28 @@ function markPaneRead() {
   Promise.allSettled(calls).then(() => { scheduleTree(); });
 }
 
+// Phones show one pane; this row of chips switches between them, in layout order.
+function paneStrip(ws) {
+  const order = [];
+  const walk = (node) => { if (!node) return; if (node.pane) order.push(node.pane.id); (node.children || []).forEach(walk); };
+  walk(ws.layout);
+  const panes = [...order.map((id) => ws.panes.find((p) => p.id === id)).filter(Boolean),
+                 ...ws.panes.filter((p) => !order.includes(p.id))];
+  const strip = el("div", { id: "paneStrip" });
+  for (const pane of panes) {
+    const shown = shownSurface(pane);
+    const unread = state.notifications.some((n) => !n.is_read && pane.surfaces.some((s) => s.id === n.surface_id));
+    const chip = el("button", {
+      className: (pane.id === state.activePane ? "on" : "") + (unread ? " unread" : ""),
+      textContent: shown ? (shown.title || shown.ref) : "(empty)",
+    });
+    chip.onclick = () => { state.activePane = pane.id; renderWorkspace(); };
+    strip.append(chip);
+  }
+  requestAnimationFrame(() => { const on = strip.querySelector(".on"); if (on) on.scrollIntoView({ inline: "nearest", block: "nearest" }); });
+  return strip;
+}
+
 function buildLayout(node, panesById, seen) {
   if (node.pane) {
     const pane = panesById[node.pane.id];
@@ -421,11 +495,23 @@ function buildPane(pane) {
     t.onclick = (e) => { e.stopPropagation(); state.shown[pane.id] = s.id; state.activePane = pane.id; renderWorkspace(); };
     tabs.append(t);
   }
+  tabs.append(el("span", { className: "spacer" }));
+  if (shown && shown.type === "terminal") {
+    const fm = el("button", { className: "fontmode", textContent: state.fontMode === "fit" ? "Aa+" : "Aa−",
+                              title: state.fontMode === "fit" ? "Larger text, scroll sideways" : "Fit every column" });
+    fm.onclick = (e) => {
+      e.stopPropagation();
+      state.fontMode = state.fontMode === "fit" ? "read" : "fit";
+      localStorage.setItem("cmuxWebFontMode", state.fontMode);
+      renderWorkspace();
+    };
+    tabs.append(fm);
+  }
   const zoomed = state.zoomPane === pane.id;
   const zoom = el("button", { className: "zoom", textContent: zoomed ? "⤡" : "⤢", title: zoomed ? "Show all panes" : "Show only this pane" });
   zoom.onclick = (e) => { e.stopPropagation(); state.zoomPane = zoomed ? null : pane.id; state.activePane = pane.id; renderWorkspace(); };
   tabs.append(zoom);
-  const box = el("div", { className: "pane" + (pane.id === state.activePane ? " active" : "") }, tabs);
+  const box = el("div", { className: "pane" + (pane.id === state.activePane ? " active" : "") + (pane.surfaces.length === 1 ? " single" : "") }, tabs);
   box.dataset.pane = pane.id;
   box.onclick = () => {
     state.activePane = pane.id;
@@ -463,8 +549,10 @@ function updateTarget() {
 function fitFont(pre, columns) {
   const width = pre.clientWidth - 10;
   if (!columns || width <= 0) return;
-  // Menlo / SF Mono advance is about 0.6em.
-  pre.style.fontSize = Math.max(7, Math.min(13, width / (columns * 0.6))) + "px";
+  if (PHONE.matches && state.fontMode === "read") { pre.style.fontSize = "11px"; return; }
+  // Menlo / SF Mono advance is about 0.6em. Phones go smaller so the whole width fits.
+  const floor = PHONE.matches ? 4.5 : 7;
+  pre.style.fontSize = Math.max(floor, Math.min(13, width / (columns * 0.6))) + "px";
 }
 
 // Scroll position lives in state, not in the <pre>: the tree refresh rebuilds
@@ -602,6 +690,22 @@ async function send(enter) {
   if (!text && !enter) return;
   await api("/api/send", { surface_id: s.id, text, enter });
   $("input").value = "";
+  growInput();
+}
+
+// Grow the box with its text, up to five lines.
+function growInput() {
+  const box = $("input");
+  if (!PHONE.matches) { box.style.height = ""; return; }
+  box.style.height = "auto";
+  const line = parseFloat(getComputedStyle(box).lineHeight) || 20;
+  box.style.height = Math.min(box.scrollHeight + 2, line * 5 + 12) + "px";
+}
+$("input").addEventListener("input", growInput);
+
+// Tapping a button would blur the text box and drop the on-screen keyboard; keep it up.
+for (const b of document.querySelectorAll("#bar button")) {
+  b.addEventListener("pointerdown", (e) => { if (document.activeElement === $("input")) e.preventDefault(); });
 }
 
 $("sendBtn").onclick = () => send(true);
@@ -732,6 +836,27 @@ function connectEvents() {
 }
 
 $("toggleSide").onclick = () => document.body.classList.toggle("show-side");
+$("scrim").onclick = () => document.body.classList.remove("show-side");
+
+function applyPhoneLayout() {
+  $("input").placeholder = PHONE.matches ? "Type here; Enter sends" : "Type text, Enter sends it with a newline, Shift+Enter for a new line";
+  growInput();
+  if (state.tree) renderWorkspace();
+}
+PHONE.addEventListener("change", applyPhoneLayout);
+applyPhoneLayout();
+
+// iOS keeps the layout viewport when the keyboard opens; size the page to what is visible.
+if (window.visualViewport) {
+  const fitViewport = () => {
+    document.documentElement.style.setProperty("--vvh", visualViewport.height + "px");
+    if (visualViewport.offsetTop) window.scrollTo(0, 0);
+    for (const pre of document.querySelectorAll("#panes pre.term")) restoreScroll(pre);
+  };
+  visualViewport.addEventListener("resize", fitViewport);
+  visualViewport.addEventListener("scroll", fitViewport);
+  fitViewport();
+}
 
 loadTree();
 loadNotifications();

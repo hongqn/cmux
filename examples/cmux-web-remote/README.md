@@ -98,6 +98,16 @@ notifications work only after you add the page to the Home Screen (iOS 16.4+),
 and only while the page is running. For pushes while the page is closed, see
 [Next steps](#next-steps).
 
+### On a phone
+
+Below 900px wide the page switches to a phone layout:
+
+- One pane fills the screen; a row of chips above it switches panes (a dot marks unread notifications).
+- **Aa+ / Aa−** in the pane's tab bar toggles between fitting every column and legible 11px text that scrolls sideways.
+- The text box and Send sit on one row and grow up to five lines; the keys (Enter, Esc, Ctrl-C, Tab, ⇧Tab, arrows, Ctrl-D, PgUp/PgDn) scroll in one row. Tapping them keeps the keyboard up.
+- The workspace list opens as a drawer from ☰.
+- "Add to Home Screen" gives a standalone app with its own icon; on iOS that is also what browser notifications need.
+
 ## How it works
 
 ```

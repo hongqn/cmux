@@ -333,6 +333,19 @@ class ServerTest(ServerHarness):
         self.assertEqual(resp.getheader("Cache-Control"), "no-store")
         self.assertEqual(resp.getheader("Referrer-Policy"), "no-referrer")
 
+    def test_home_screen_manifest_and_icons_need_no_login(self) -> None:
+        resp = self.request("GET", "/manifest.webmanifest", auth=False)
+        self.assertEqual(resp.status, 200)
+        manifest = json.loads(resp.read())
+        self.assertEqual(manifest["display"], "standalone")
+        for icon in manifest["icons"] + [{"src": "/apple-touch-icon.png", "sizes": "180x180"}]:
+            resp = self.request("GET", icon["src"], auth=False)
+            body = resp.read()
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(body[:8], b"\x89PNG\r\n\x1a\n")
+            side = int(icon["sizes"].split("x")[0])
+            self.assertEqual((int.from_bytes(body[16:20], "big"), int.from_bytes(body[20:24], "big")), (side, side))
+
     def test_successful_requests_are_not_logged(self) -> None:
         # The server usually runs in a cmux terminal that the browser is
         # watching: a log line per poll changes that terminal, which answers
