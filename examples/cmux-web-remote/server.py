@@ -26,6 +26,7 @@ import os
 import queue
 import re
 import secrets
+import shlex
 import socket
 import ssl
 import subprocess
@@ -38,10 +39,14 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import agentchat
+import panels
 import qrterm
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 INDEX_HTML = os.path.join(HERE, "static", "index.html")
+STATIC_DIR = os.path.join(HERE, "static")
+ASSET_TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8"}
+BROWSER_KEYS = {"Enter", "Tab", "Escape", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown"}
 
 COOKIE_NAME = "cmux_web_token"
 # "sidebar" carries status pills, logs and progress; "terminal" carries
@@ -610,6 +615,52 @@ CHAT_CHECK_SECONDS = 0.4
 CHAT_AGENTS = {"claude"}  # transcripts agentchat can read
 
 
+class BrowserViewports:
+    """Lays out browser panels at the viewer's size while the web remote shows them.
+
+    A browser panel that is not on the Mac's screen has no layout (innerWidth
+    is 0), so it can be neither screenshotted fresh nor tapped. browser.
+    viewport.set gives it one, at the phone's size; the Mac shows that panel
+    scaled to fit until it is reset. Each viewer renews a lease with every
+    screenshot; a reaper resets panels nobody has looked at for LEASE_SECONDS,
+    so a closed phone does not leave the Mac's browser emulating it.
+    """
+
+    LEASE_SECONDS = 20
+
+    def __init__(self, client: CmuxClient) -> None:
+        self.client = client
+        self.lock = threading.Lock()
+        self.leases: Dict[str, Tuple[int, int, float]] = {}
+        threading.Thread(target=self._reap, daemon=True).start()
+
+    def hold(self, surface_id: str, width: int, height: int) -> None:
+        width, height = max(240, min(width, 2560)), max(240, min(height, 2560))
+        with self.lock:
+            current = self.leases.get(surface_id)
+            self.leases[surface_id] = (width, height, time.monotonic())
+        if not current or current[:2] != (width, height):
+            self.client.call("browser.viewport.set", {"surface_id": surface_id, "width": width, "height": height})
+
+    def release(self, surface_id: str) -> None:
+        with self.lock:
+            held = self.leases.pop(surface_id, None)
+        if held:
+            try:
+                self.client.call("browser.viewport.set", {"surface_id": surface_id, "reset": True})
+            except CmuxError:
+                pass
+
+    def _reap(self) -> None:
+        while True:
+            time.sleep(5)
+            now = time.monotonic()
+            with self.lock:
+                stale = [sid for sid, (_, _, at) in self.leases.items() if now - at > self.LEASE_SECONDS]
+            for sid in stale:
+                self.release(sid)
+
+
 class AgentSessions:
     """Coding-agent sessions cmux tracks, from `chat.sessions.dump`.
 
@@ -750,6 +801,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     client: CmuxClient
     hub: EventHub
     agents: AgentSessions
+    files: panels.SessionFiles
+    viewports: BrowserViewports
     token: str
     allowed_origins: List[str]
     # Off by default: the server usually runs in a cmux terminal the browser
@@ -839,6 +892,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not self._authorized():
                 return self._send_login_page()
             return self._send_file(INDEX_HTML, "text/html; charset=utf-8")
+        if url.path.startswith("/assets/"):
+            name = url.path[len("/assets/"):]
+            kind = ASSET_TYPES.get(os.path.splitext(name)[1])
+            asset = os.path.join(STATIC_DIR, name)
+            if not kind or "/" in name or name.startswith(".") or not os.path.isfile(asset):
+                return self._send_json(404, {"error": "not_found"})
+            return self._send_file(asset, kind)
         if not self._authorized():
             return self._send_json(401, {"error": "unauthorized"})
         try:
@@ -872,6 +932,48 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if result is None:
             return self._send_json(404, {"error": "not_found"})
         self._send_json(200, result)
+
+    def _browser_act(self, surface_id: str, action: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        def num(key: str, default: float = 0.0) -> float:
+            value = body.get(key, default)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise CmuxError("bad_request", f"{key} must be a number")
+            return float(value)
+
+        target = {"surface_id": surface_id}
+        if action == "tap":
+            script = panels.tap_script(num("fx"), num("fy"))
+        elif action == "scroll":
+            script = panels.scroll_script(num("fx", 0.5), num("fy", 0.5), num("dx"), num("dy"))
+        elif action == "type":
+            text = body.get("text")
+            if not isinstance(text, str) or not text:
+                raise CmuxError("bad_request", "text required")
+            script = panels.type_script(text)
+        elif action == "key":
+            key = body.get("key")
+            if key not in BROWSER_KEYS:
+                raise CmuxError("bad_request", "unsupported key")
+            return self.client.call("browser.press", dict(target, key=key)) or {"ok": True}
+        elif action == "navigate":
+            url = body.get("url")
+            if not isinstance(url, str) or not url.strip():
+                raise CmuxError("bad_request", "url required")
+            url = url.strip()
+            scheme = re.match(r"^([a-zA-Z][\w+.-]*):(?!\d)", url)
+            if scheme and scheme.group(1).lower() not in ("http", "https"):
+                raise CmuxError("bad_request", "only http and https URLs")
+            if "://" not in url:
+                url = "https://" + url
+            if urlparse(url).scheme not in ("http", "https"):
+                raise CmuxError("bad_request", "only http and https URLs")
+            return self.client.call("browser.navigate", dict(target, url=url)) or {"ok": True}
+        elif action in ("back", "forward", "reload"):
+            return self.client.call("browser." + action, target) or {"ok": True}
+        else:
+            raise CmuxError("bad_request", "unknown browser action")
+        result = self.client.call("browser.eval", dict(target, script=script)) or {}
+        return {"ok": True, "value": result.get("value")}
 
     def _chat(self, action: str, body: Dict[str, Any], need: Any) -> Optional[Dict[str, Any]]:
         session_id = need("session_id")
@@ -967,6 +1069,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return {"text": screen_text(result)}
         if path.startswith("/api/chat/"):
             return self._chat(path[len("/api/chat/"):], body, need)
+        if path == "/api/browser/release":
+            self.viewports.release(need("surface_id"))
+            return {"ok": True}
+        if path == "/api/browser/shot":
+            surface_id = need("surface_id")
+            width, height = body.get("width"), body.get("height")
+            if isinstance(width, int) and isinstance(height, int) and not isinstance(width, bool):
+                self.viewports.hold(surface_id, width, height)
+            shot = self.client.call("browser.screenshot", {"surface_id": surface_id}) or {}
+            png = shot.get("png_base64") or ""
+            digest = panels.shot_hash(png)
+            try:
+                page = self.client.call("browser.url.get", {"surface_id": surface_id}) or {}
+            except CmuxError:
+                page = {}
+            result: Dict[str, Any] = {"hash": digest, "url": page.get("url") or shot.get("page_url") or ""}
+            if digest != body.get("hash"):
+                result["png"] = png
+            return result
+        if path == "/api/browser/act":
+            return self._browser_act(need("surface_id"), need("action"), body)
+        if path == "/api/file":
+            file_path = self.files.path_for(need("surface_id"))
+            if not file_path or not os.path.isfile(file_path):
+                raise CmuxError("not_found", "cmux has not saved which file this panel shows yet")
+            known = body.get("stamp") if isinstance(body.get("stamp"), str) else None
+            return panels.read_file(file_path, known)
+        if path == "/api/session/new":
+            # A new workspace whose shell starts Claude Code, with the first prompt if given.
+            cwd = need("cwd")
+            prompt = body.get("prompt") if isinstance(body.get("prompt"), str) else ""
+            command = "claude" + (" " + shlex.quote(prompt.strip()) if prompt.strip() else "")
+            params = {"cwd": cwd, "initial_input": command + "\n"}
+            if isinstance(body.get("window_id"), str) and body["window_id"]:
+                params["window_id"] = body["window_id"]
+            return self.client.call("workspace.create", params) or {}
         if path == "/api/workspace/select":
             # This switches the workspace on the Mac screen too.
             self.client.call("workspace.select", {"workspace_id": need("workspace_id")})
@@ -1059,7 +1197,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:")
         self.end_headers()
         self.wfile.write(data)
 
@@ -1216,6 +1354,8 @@ def make_server(host: str, port: int, client: CmuxClient, hub: EventHub, token: 
         "client": client,
         "hub": hub,
         "agents": AgentSessions(client),
+        "files": panels.SessionFiles(),
+        "viewports": BrowserViewports(client),
         "token": token,
         "allowed_origins": allowed_origins or [],
         "access_log": access_log,

@@ -1,32 +1,38 @@
 # cmux web remote (prototype)
 
-A small web server that lets a browser (phone, tablet, another computer) drive
-the cmux app on your Mac:
+A small web server and installable web app (PWA) for driving the cmux app on
+your Mac from a phone, tablet or another computer. It looks and works like the
+Claude app, with cmux's workspaces as the organizing layer:
 
-- see every window and workspace, with each workspace's split layout: all
-  panes side by side as in cmux, each with its tab bar
-- watch terminals live and in color (cmux's own render grid), with the cursor;
-  zoom one pane to read it full size
-- type text and send keys (Enter, Esc, Ctrl-C, Tab, arrows, Ctrl-D)
-- create a workspace, or switch the Mac's window to one
-- a sidebar that mirrors cmux's own rows: unread badge, latest notification
-  preview, description, color rail, agent status pills (Working / Done / Idle),
-  newest log line, progress, branch, directory, PRs and ports
-- a bell with the unread count opening a notifications list laid out like
-  cmux's (Jump to Latest Unread, Clear All, per-notification clear), plus
-  browser notifications; picking a pane marks its notifications read, as
-  focusing it in cmux does
+- **Drawer**: cmux's workspaces, each expandable to what it holds: Claude
+  Code sessions (✳), terminals (›_), browsers (◍), Markdown documents (¶) and
+  file previews (▤). A workspace shows a spinner while an agent works, "Needs
+  your input" when one waits on you, and its unread count.
+- **Claude Code sessions** open as a chat read from the session's transcript:
+  your messages as bubbles, replies as Markdown, tool calls folded into steps
+  with diffs and output, AskUserQuestion as tappable options, and permission
+  prompts with 1/2/3/Esc. The composer sends a prompt; while Claude works its
+  button stops it. A Terminal switch shows the raw screen.
+- **Terminals** live and in color, with keys (Enter, Esc, Ctrl-C, Tab, ⇧Tab,
+  arrows, Ctrl-D, PgUp/PgDn).
+- **Browsers** as a live screenshot rendered at the device's size: tap to
+  click, drag or wheel to scroll, type into the focused field, plus an address
+  bar with back, forward and reload.
+- **Markdown and file previews** rendered, following the file as it changes.
+- **New session**: pick a folder, optionally describe a task; a new workspace
+  starts `claude` there and opens its chat.
+- **Notifications** in a list laid out like cmux's, with browser
+  notifications; opening an item marks its notifications read.
 
-It uses only the public cmux control socket (v2 JSON lines) and the
-[`events.stream`](../../docs/events.md) subscription. It does not change cmux.
-Python standard library only, so the macOS system `python3` (3.9+) runs it.
+It uses the cmux control socket (v2 JSON lines) and the
+[`events.stream`](../../docs/events.md) subscription, plus two local files
+cmux keeps: Claude Code transcripts (for chats) and cmux's saved session (for
+which file a Markdown panel shows). Python standard library only, so the macOS
+system `python3` (3.9+) runs it.
 
-It is a prototype. Terminals are redrawn from snapshots when their text
-changes (checked every 0.5 s on cmux builds without `surface.wait_text_change`),
-not streamed byte by byte, and keyboard input goes through the text box and key
-buttons rather than straight from the browser keyboard. That is fine for
-watching agents and answering them; full-screen TUIs such as vim are readable
-but clumsy to drive. Browser and Markdown tabs are listed but not mirrored.
+It is a prototype. Terminals are redrawn from snapshots, not streamed byte by
+byte. Browser panels are screenshots refreshed about once a second, and taps
+are synthetic clicks, so pages that check for trusted input events ignore them.
 
 ## Run
 
@@ -98,34 +104,12 @@ notifications work only after you add the page to the Home Screen (iOS 16.4+),
 and only while the page is running. For pushes while the page is closed, see
 [Next steps](#next-steps).
 
-### Claude Code as a chat
-
-A terminal running Claude Code gets a **Chat / Terminal** switch (phones open
-in Chat). The chat view reads the session's transcript, so it wraps to the page
-instead of the terminal's columns:
-
-- your messages as bubbles, Claude's replies as Markdown (code, tables, lists);
-- tool calls folded into "N steps" groups, each step with its command, diff or
-  output and a ✓/✗;
-- AskUserQuestion as tappable options;
-- a status line: Stop while Claude works; when it waits for a permission, the
-  bottom of the terminal screen with 1/2/3/Esc keys.
-
-Messages go through cmux's `mobile.chat.send` (the iOS app's path: clear the
-prompt, bracketed paste, submit), so multi-line text arrives as one prompt.
-cmux's `chat.sessions.dump` names each session's terminal and transcript; the
-transcript path never leaves the server. Only Claude Code transcripts are
-parsed for now; other agents (Codex) keep the terminal view.
-
 ### On a phone
 
-Below 900px wide the page switches to a phone layout:
-
-- One pane fills the screen; a row of chips above it switches panes (a dot marks unread notifications).
-- **Aa+ / Aa−** in the pane's tab bar toggles between fitting every column and legible 11px text that scrolls sideways.
-- The text box and Send sit on one row and grow up to five lines; the keys (Enter, Esc, Ctrl-C, Tab, ⇧Tab, arrows, Ctrl-D, PgUp/PgDn) scroll in one row. Tapping them keeps the keyboard up.
-- The workspace list opens as a drawer from ☰.
-- "Add to Home Screen" gives a standalone app with its own icon; on iOS that is also what browser notifications need.
+Add the page to the Home Screen: it opens as a standalone app with its own
+icon, and on iOS that is also what browser notifications need. The drawer
+slides in from ☰; on screens wider than 900px it stays open. In a chat on a
+phone, Return adds a line and the ↑ button sends; elsewhere Enter sends.
 
 ## How it works
 
@@ -177,6 +161,26 @@ API calls also accept `Authorization: Bearer <token>`, so scripts can use them:
 curl -H "Authorization: Bearer $CMUX_WEB_TOKEN" http://127.0.0.1:8787/api/tree
 ```
 
+### Browsers, Markdown and new sessions
+
+A browser panel that is not on the Mac's screen has no layout: `innerWidth`
+is 0, its screenshot is stale and nothing can be tapped. While the web app
+shows one, the server lays it out at the device's size with
+`browser.viewport.set` (the Mac shows that panel scaled to fit) and resets it
+when you leave; a lease resets panels nobody has looked at for 20 seconds, so a
+closed phone does not leave it that way. Taps and scrolls run as small scripts
+through `browser.eval` (`elementFromPoint`, then pointer and click events),
+because the socket has no raw pointer input; typing uses
+`execCommand('insertText')` on the focused element; keys use `browser.press`.
+
+The socket does not say which file a Markdown or file-preview panel shows, so
+the server reads `filePath` from cmux's saved session
+(`~/Library/Application Support/cmux/session-com.cmuxterm.app.json`). That is
+cmux's internal format; if it changes, those panels show "not available".
+
+New session runs `workspace.create` with the folder and `initial_input:
+"claude '<task>'\n"`, so Claude starts in the workspace's shell.
+
 ## Security notes
 
 - Every API route needs the token (cookie or bearer), compared in constant time.
@@ -197,7 +201,10 @@ python3 examples/cmux-web-remote/test_server.py
 
 ## Next steps
 
+- Codex transcripts in the chat view (cmux already parses them for the iOS app).
+- A `file_path` field on `surface.list` in cmux, so Markdown panels need not
+  read cmux's saved session.
+- Image attachments in chats (`mobile.chat.send` accepts them).
 - Feed approval buttons (`feed.permission.reply` and friends) for agent
   permission requests.
 - Web Push (VAPID) or ntfy/Bark forwarding, for alerts while the page is closed.
-- An xterm.js view with colors, if cmux exposes a PTY byte stream to socket clients.

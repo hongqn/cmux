@@ -27,6 +27,7 @@ from typing import Any, Dict, List
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import agentchat  # noqa: E402
+import panels  # noqa: E402
 import qrterm  # noqa: E402
 import server  # noqa: E402
 
@@ -113,6 +114,7 @@ class FakeCmux:
         # chat.sessions.dump records; mobile.chat.send answers not_found when chat_send_lost.
         self.chat_sessions: List[Dict[str, Any]] = []
         self.chat_send_lost = False
+        self.screenshot = "iVBORw0KGgo="
         # Mimic cmuxOnly refusing a process outside cmux's process tree.
         self.deny = False
         # Mimic cmux builds (0.65.x) without surface.wait_text_change.
@@ -232,6 +234,14 @@ class FakeCmux:
             return {"text": text, "revision": "rev-1", "changed": changed}
         if method == "notification.list":
             return {"notifications": [dict(n) for n in self.notifications]}
+        if method == "browser.screenshot":
+            return {"png_base64": self.screenshot, "surface_id": params.get("surface_id")}
+        if method == "browser.url.get":
+            return {"url": "https://example.com/"}
+        if method == "browser.eval":
+            return {"value": "a"}
+        if method == "workspace.create":
+            return {"workspace_id": "new-ws", "workspace_ref": "workspace:9"}
         if method == "chat.sessions.dump":
             return {"sessions": [dict(x) for x in self.chat_sessions]}
         if method in ("mobile.chat.send", "mobile.chat.interrupt") and self.chat_send_lost:
@@ -829,6 +839,74 @@ class AgentChatServerTest(ServerHarness):
         self.assertEqual(status, 200)
         self.assertEqual([c for c in self.fake.calls if c["method"] == "mobile.chat.interrupt"][-1]["params"],
                          {"session_id": "sess-1", "hard": False})
+
+
+class PanelsTest(ServerHarness):
+    def post(self, path: str, body: Dict[str, Any]) -> Any:
+        resp = self.request("POST", path, body, headers={"Origin": f"http://127.0.0.1:{self.port}"})
+        return resp.status, json.loads(resp.read() or b"null")
+
+    def last(self, method: str) -> Dict[str, Any]:
+        return [c for c in self.fake.calls if c["method"] == method][-1]["params"]
+
+    def test_assets(self) -> None:
+        resp = self.request("GET", "/assets/app.js")
+        self.assertEqual(resp.status, 200)
+        self.assertIn("javascript", resp.getheader("Content-Type"))
+        self.assertEqual(self.request("GET", "/assets/..%2Fserver.py").status, 404)
+        self.assertEqual(self.request("GET", "/assets/server.py").status, 404)
+
+    def test_page_allows_data_images(self) -> None:
+        self.assertIn("img-src 'self' data:", self.request("GET", "/").getheader("Content-Security-Policy"))
+
+    def test_browser_shot_holds_the_viewport_and_skips_unchanged_images(self) -> None:
+        status, first = self.post("/api/browser/shot", {"surface_id": BROWSER_ID, "width": 390, "height": 700})
+        self.assertEqual((status, first["png"], first["url"]), (200, self.fake.screenshot, "https://example.com/"))
+        self.assertEqual(self.last("browser.viewport.set"), {"surface_id": BROWSER_ID, "width": 390, "height": 700})
+        sets = len([c for c in self.fake.calls if c["method"] == "browser.viewport.set"])
+        status, second = self.post("/api/browser/shot", {"surface_id": BROWSER_ID, "hash": first["hash"], "width": 390, "height": 700})
+        self.assertNotIn("png", second)
+        self.assertEqual(len([c for c in self.fake.calls if c["method"] == "browser.viewport.set"]), sets)
+        self.post("/api/browser/release", {"surface_id": BROWSER_ID})
+        self.assertEqual(self.last("browser.viewport.set"), {"surface_id": BROWSER_ID, "reset": True})
+
+    def test_browser_actions(self) -> None:
+        self.assertEqual(self.post("/api/browser/act", {"surface_id": BROWSER_ID, "action": "tap", "fx": 0.5, "fy": 0.25})[0], 200)
+        script = self.last("browser.eval")["script"]
+        self.assertIn("elementFromPoint", script)
+        self.assertIn("0.250000 * innerHeight", script)
+        self.post("/api/browser/act", {"surface_id": BROWSER_ID, "action": "type", "text": "it's \"quoted\""})
+        self.assertIn(json.dumps("it's \"quoted\""), self.last("browser.eval")["script"])
+        self.post("/api/browser/act", {"surface_id": BROWSER_ID, "action": "navigate", "url": "example.org/x"})
+        self.assertEqual(self.last("browser.navigate")["url"], "https://example.org/x")
+        self.post("/api/browser/act", {"surface_id": BROWSER_ID, "action": "navigate", "url": "localhost:8080"})
+        self.assertEqual(self.last("browser.navigate")["url"], "https://localhost:8080")
+        bad = [{"action": "navigate", "url": "javascript:alert(1)"}, {"action": "navigate", "url": "file:///etc/passwd"}, {"action": "key", "key": "Meta"},
+               {"action": "tap", "fx": "0.5", "fy": 0.1}, {"action": "explode"}]
+        for body in bad:
+            self.assertEqual(self.post("/api/browser/act", dict(body, surface_id=BROWSER_ID))[0], 400, body)
+
+    def test_file_panels_read_the_path_cmux_saved(self) -> None:
+        doc = os.path.join(self.tmp, "notes.md")
+        with open(doc, "w") as fh:
+            fh.write("# Notes\nhello")
+        session = os.path.join(self.tmp, "session-com.cmuxterm.app.json")
+        with open(session, "w") as fh:
+            json.dump({"windows": [{"panels": [{"id": BROWSER_ID.lower(), "type": "markdown", "markdown": {"filePath": doc}}]}]}, fh)
+        self.httpd.RequestHandlerClass.files = panels.SessionFiles(os.path.join(self.tmp, "session-com.cmuxterm.app*.json"))
+        status, first = self.post("/api/file", {"surface_id": BROWSER_ID})
+        self.assertEqual((status, first["text"], first["name"]), (200, "# Notes\nhello", "notes.md"))
+        status, again = self.post("/api/file", {"surface_id": BROWSER_ID, "stamp": first["stamp"]})
+        self.assertEqual(again, {"unchanged": True, "stamp": first["stamp"]})
+        self.assertEqual(self.post("/api/file", {"surface_id": SURF_ID})[0], 404)
+
+    def test_new_session_starts_claude_with_the_prompt(self) -> None:
+        status, r = self.post("/api/session/new", {"cwd": "~/src/api", "prompt": "fix it; rm -rf /"})
+        self.assertEqual((status, r["workspace_id"]), (200, "new-ws"))
+        self.assertEqual(self.last("workspace.create"),
+                         {"cwd": "~/src/api", "initial_input": "claude 'fix it; rm -rf /'\n"})
+        self.post("/api/session/new", {"cwd": "/tmp"})
+        self.assertEqual(self.last("workspace.create")["initial_input"], "claude\n")
 
 
 class PhoneAccessTest(unittest.TestCase):
